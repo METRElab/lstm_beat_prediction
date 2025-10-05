@@ -1,0 +1,48 @@
+{
+  "paths": {
+    "experiment_dir": "./experiments",
+    "experiment_path": null
+  },
+
+  "model": {
+    "num_layers": 2,
+    "hidden_size": 128,
+    "dropout": 0.1,
+    "input_size": 1,
+    "output_size": 1
+  },
+
+  "training": {
+    "epochs": 100,
+    "batch_size": 32,
+    "learning_rate": 0.001,
+    "trials_per_epoch": 1000,
+    "validation_trials": 100,
+    "checkpoint_best_only": true,
+    "optimizer": "adam"
+  },
+
+  "task": {
+    "min_period": 0.4,
+    "max_period": 0.8,
+    "n_pulses": 5,
+    "pulse_height": 0.5,
+    "pulse_width": 0.05,
+    "dt": 0.001,
+    "sequence_length": 10.0,
+    "baseline_value": 0.0
+  },
+
+  "logging": {
+    "tensorboard": true,
+    "log_interval": 10,
+    "save_interval": 10
+  },
+
+  "testing": {
+    "n_test_periods": 10,
+    "test_trials_per_period": 5
+  },
+
+  "seed": 42
+}
