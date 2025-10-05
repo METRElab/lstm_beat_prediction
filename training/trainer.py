@@ -2,12 +2,9 @@
 Training utilities for LSTM beat prediction model.
 """
 
-from typing import Dict, Any, Optional, Tuple
-import os
-import json
+from typing import Dict, Any
 import logging
 from pathlib import Path
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -63,7 +60,7 @@ class Trainer:
 
         # Setup tensorboard
         if config['logging']['tensorboard']:
-            self.writer = SummaryWriter(self.experiment_path / 'tensorboard')
+            self.writer = SummaryWriter(str(self.experiment_path / 'tensorboard'))
         else:
             self.writer = None
 

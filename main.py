@@ -86,7 +86,7 @@ def train(config_path: str) -> None:
     config['paths']['experiment_path'] = str(experiment_path)
 
     # Save updated config in experiment folder
-    save_config(config, experiment_path / 'config.json')
+    save_config(config, str(experiment_path / 'config.json'))
 
     # Setup logging
     logger = setup_logger(

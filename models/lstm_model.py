@@ -88,7 +88,7 @@ class BeatPredictionLSTM(nn.Module):
         """
         h0 = torch.zeros(self.num_layers, batch_size, self.hidden_size).to(device)
         c0 = torch.zeros(self.num_layers, batch_size, self.hidden_size).to(device)
-        return (h0, c0)
+        return h0, c0
 
     def predict(self, x: torch.Tensor) -> torch.Tensor:
         """
