@@ -180,6 +180,8 @@ def test(config_path: str, checkpoint_name: str = 'best_model.pth') -> None:
         pulse_height=config['task']['pulse_height'],
         dt=config['task']['dt'],
         sequence_length=config['task']['sequence_length'],
+        min_iti=config['task']['min_iti'],
+        mean_iti=config['task']['mean_iti'],
         baseline_value=config['task']['baseline_value']
     )
 

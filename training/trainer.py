@@ -95,6 +95,8 @@ class Trainer:
                 pulse_height=self.config['task']['pulse_height'],
                 dt=self.config['task']['dt'],
                 sequence_length=self.config['task']['sequence_length'],
+                min_iti=self.config['task']['min_iti'],
+                mean_iti=self.config['task']['mean_iti'],
                 baseline_value=self.config['task']['baseline_value']
             )
 
@@ -151,6 +153,8 @@ class Trainer:
                     pulse_height=self.config['task']['pulse_height'],
                     dt=self.config['task']['dt'],
                     sequence_length=self.config['task']['sequence_length'],
+                    min_iti=self.config['task']['min_iti'],
+                    mean_iti=self.config['task']['mean_iti'],
                     baseline_value=self.config['task']['baseline_value']
                 )
 
@@ -196,7 +200,7 @@ class Trainer:
 
         # Save best model
         if is_best:
-            best_path = self.checkpoint_dir / 'best_model.pth'
+            best_path = self.checkpoint_dir / f"checkpoint_epoch_{epoch}.pth"
             torch.save(checkpoint, best_path)
             self.logger.info(f"Saved best model: {best_path}")
 

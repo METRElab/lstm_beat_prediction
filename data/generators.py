@@ -8,13 +8,14 @@ import torch
 
 
 def generate_beat_sequence(
-        period: float,
-        n_pulses: int,
-        pulse_width: float,
-        pulse_height: float,
-        dt: float,
-        sequence_length: float,
-        baseline_value: float = 0.0
+    period: float,
+    n_pulses: int,
+    pulse_width: float,
+    pulse_height: float,
+    dt: float,
+    sequence_length: float,
+    iti: float,
+    baseline_value: float = 0.0
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Generate a single beat sequence with its target.
@@ -26,6 +27,7 @@ def generate_beat_sequence(
         pulse_height: Height of the pulse
         dt: Time step in seconds
         sequence_length: Total sequence length in seconds
+        iti: Inter-trial interval (time before first and after last beat)
         baseline_value: Value when no pulse is present
 
     Returns:
@@ -41,8 +43,8 @@ def generate_beat_sequence(
     # Calculate number of samples for pulse width
     pulse_samples = int(pulse_width / dt)
 
-    # Start time for first pulse (add some initial delay)
-    start_delay = period * 0.5
+    # Start time for first pulse (after ITI/2)
+    start_delay = iti / 2
 
     # Generate input pulses
     for i in range(n_pulses):
@@ -69,19 +71,42 @@ def generate_beat_sequence(
     return input_sequence, target_sequence
 
 
+def calculate_iti(min_iti: float, mean_iti: float) -> float:
+    """
+    Calculate inter-trial interval using exponential distribution.
+
+    Args:
+        min_iti: Minimum ITI value
+        mean_iti: Mean ITI value for exponential distribution
+
+    Returns:
+        ITI value sampled from shifted exponential distribution
+    """
+    # Calculate scale parameter for exponential distribution
+    # Since we want mean_iti after shifting by min_iti
+    scale = mean_iti - min_iti
+
+    # Sample from exponential and add minimum
+    iti = min_iti + np.random.exponential(scale)
+
+    return iti
+
+
 def create_batch(
-        batch_size: int,
-        min_period: float,
-        max_period: float,
-        n_pulses: int,
-        pulse_width: float,
-        pulse_height: float,
-        dt: float,
-        sequence_length: float,
-        baseline_value: float = 0.0
+    batch_size: int,
+    min_period: float,
+    max_period: float,
+    n_pulses: int,
+    pulse_width: float,
+    pulse_height: float,
+    dt: float,
+    sequence_length: float,
+    min_iti: float,
+    mean_iti: float,
+    baseline_value: float = 0.0
 ) -> Tuple[torch.Tensor, torch.Tensor, List[float]]:
     """
-    Create a batch of sequences with random periods.
+    Create a batch of sequences with random periods and ITIs.
 
     Args:
         batch_size: Number of sequences in batch
@@ -92,6 +117,8 @@ def create_batch(
         pulse_height: Height of pulses
         dt: Time step in seconds
         sequence_length: Total sequence length in seconds
+        min_iti: Minimum inter-trial interval
+        mean_iti: Mean inter-trial interval
         baseline_value: Baseline value when no pulse
 
     Returns:
@@ -111,6 +138,9 @@ def create_batch(
         period = np.random.uniform(min_period, max_period)
         periods.append(period)
 
+        # Calculate ITI for this trial
+        iti = calculate_iti(min_iti, mean_iti)
+
         # Generate sequence
         input_seq, target_seq = generate_beat_sequence(
             period=period,
@@ -119,6 +149,7 @@ def create_batch(
             pulse_height=pulse_height,
             dt=dt,
             sequence_length=sequence_length,
+            iti=iti,
             baseline_value=baseline_value
         )
 
@@ -134,16 +165,18 @@ def create_batch(
 
 
 def generate_test_sequences(
-        n_periods: int,
-        min_period: float,
-        max_period: float,
-        trials_per_period: int,
-        n_pulses: int,
-        pulse_width: float,
-        pulse_height: float,
-        dt: float,
-        sequence_length: float,
-        baseline_value: float = 0.0
+    n_periods: int,
+    min_period: float,
+    max_period: float,
+    trials_per_period: int,
+    n_pulses: int,
+    pulse_width: float,
+    pulse_height: float,
+    dt: float,
+    sequence_length: float,
+    min_iti: float,
+    mean_iti: float,
+    baseline_value: float = 0.0
 ) -> Dict[str, Any]:
     """
     Generate test sequences with evenly spaced periods.
@@ -158,6 +191,8 @@ def generate_test_sequences(
         pulse_height: Height of pulses
         dt: Time step
         sequence_length: Total sequence length
+        min_iti: Minimum inter-trial interval
+        mean_iti: Mean inter-trial interval
         baseline_value: Baseline value
 
     Returns:
@@ -179,6 +214,9 @@ def generate_test_sequences(
         }
 
         for _ in range(trials_per_period):
+            # Calculate ITI for this trial
+            iti = calculate_iti(min_iti, mean_iti)
+
             input_seq, target_seq = generate_beat_sequence(
                 period=period,
                 n_pulses=n_pulses,
@@ -186,6 +224,7 @@ def generate_test_sequences(
                 pulse_height=pulse_height,
                 dt=dt,
                 sequence_length=sequence_length,
+                iti=iti,
                 baseline_value=baseline_value
             )
 
