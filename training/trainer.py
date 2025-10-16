@@ -11,7 +11,7 @@ import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
 
 from models import BeatPredictionLSTM
-from data import create_batch
+from data import create_batch_from_config
 
 
 class Trainer:
@@ -86,19 +86,18 @@ class Trainer:
 
         for _ in range(n_batches_total):
             # Generate batch
-            inputs, targets, _ = create_batch(
-                batch_size=batch_size,
-                min_period=self.config['task']['min_period'],
-                max_period=self.config['task']['max_period'],
-                n_pulses=self.config['task']['n_pulses'],
-                pulse_width=self.config['task']['pulse_width'],
-                pulse_height=self.config['task']['pulse_height'],
-                dt=self.config['task']['dt'],
-                sequence_length=self.config['task']['sequence_length'],
-                min_iti=self.config['task']['min_iti'],
-                mean_iti=self.config['task']['mean_iti'],
-                baseline_value=self.config['task']['baseline_value']
-            )
+            inputs, targets, _ = create_batch_from_config(self.config)
+            # inputs, targets, _ = create_batch_rectangle(batch_size=batch_size,
+            #                                             min_period=self.config['task']['min_period'],
+            #                                             max_period=self.config['task']['max_period'],
+            #                                             n_pulses=self.config['task']['n_pulses'],
+            #                                             pulse_width=self.config['task']['pulse_width'],
+            #                                             pulse_height=self.config['task']['pulse_height'],
+            #                                             dt=self.config['task']['dt'],
+            #                                             sequence_length=self.config['task']['sequence_length'],
+            #                                             min_iti=self.config['task']['min_iti'],
+            #                                             mean_iti=self.config['task']['mean_iti'],
+            #                                             baseline_value=self.config['task']['baseline_value'])
 
             # Move to device
             inputs = inputs.to(self.device)
@@ -144,19 +143,7 @@ class Trainer:
         with torch.no_grad():
             for _ in range(n_batches_total):
                 # Generate validation batch
-                inputs, targets, _ = create_batch(
-                    batch_size=batch_size,
-                    min_period=self.config['task']['min_period'],
-                    max_period=self.config['task']['max_period'],
-                    n_pulses=self.config['task']['n_pulses'],
-                    pulse_width=self.config['task']['pulse_width'],
-                    pulse_height=self.config['task']['pulse_height'],
-                    dt=self.config['task']['dt'],
-                    sequence_length=self.config['task']['sequence_length'],
-                    min_iti=self.config['task']['min_iti'],
-                    mean_iti=self.config['task']['mean_iti'],
-                    baseline_value=self.config['task']['baseline_value']
-                )
+                inputs, targets, _ = create_batch_from_config(self.config)
 
                 # Move to device
                 inputs = inputs.to(self.device)

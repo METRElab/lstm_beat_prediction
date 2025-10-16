@@ -13,7 +13,7 @@ import torch
 
 from models import BeatPredictionLSTM
 from training import Trainer
-from data import generate_test_sequences
+from data import generate_test_sequences_from_config
 from utils import setup_logger
 from utils import plot_predictions, plot_accuracy_vs_period, create_test_report
 
@@ -170,20 +170,7 @@ def test(config_path: str, checkpoint_name: str = 'best_model.pth') -> None:
 
     # Generate test data
     logger.info("Generating test sequences...")
-    test_data = generate_test_sequences(
-        n_periods=config['testing']['n_test_periods'],
-        min_period=config['task']['min_period'],
-        max_period=config['task']['max_period'],
-        trials_per_period=config['testing']['test_trials_per_period'],
-        n_pulses=config['task']['n_pulses'],
-        pulse_width=config['task']['pulse_width'],
-        pulse_height=config['task']['pulse_height'],
-        dt=config['task']['dt'],
-        sequence_length=config['task']['sequence_length'],
-        min_iti=config['task']['min_iti'],
-        mean_iti=config['task']['mean_iti'],
-        baseline_value=config['task']['baseline_value']
-    )
+    test_data = generate_test_sequences_from_config(config)
 
     # Test model
     logger.info("Testing model...")

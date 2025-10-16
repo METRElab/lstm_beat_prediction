@@ -6,13 +6,11 @@ and testing LSTM models on beat prediction tasks.
 """
 
 from .generators import (
-    generate_beat_sequence,
-    create_batch,
-    generate_test_sequences
+    create_batch_from_config,
+    generate_test_sequences_from_config
 )
 
 __all__ = [
-    'generate_beat_sequence',
-    'create_batch', 
-    'generate_test_sequences'
+    'create_batch_from_config',
+    'generate_test_sequences_from_config',
 ]

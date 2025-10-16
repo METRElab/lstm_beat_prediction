@@ -34,27 +34,23 @@ def plot_predictions(
     time = np.arange(n_timesteps) * dt
 
     # Create figure with 3 subplots
-    fig, axes = plt.subplots(3, 1, figsize=(12, 8), sharex=True)
+    fig, axes = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
 
     # Plot input
-    axes[0].plot(time, input_sequence, 'b-', linewidth=1.5)
+    axes[0].plot(time, input_sequence, 'b-', label='Input', linewidth=1.5)
     axes[0].set_ylabel('Input', fontsize=10)
-    axes[0].set_ylim(-0.1, 0.6)
     axes[0].grid(True, alpha=0.3)
+    axes[0].legend(loc='upper right')
     axes[0].set_title(f'Beat Prediction - Period: {period:.3f}s', fontsize=12)
 
-    # Plot target
-    axes[1].plot(time, target_sequence, 'g-', linewidth=1.5)
-    axes[1].set_ylabel('Target', fontsize=10)
-    axes[1].set_ylim(-0.1, 0.6)
+    # Plot target and prediction
+    axes[1].plot(time, target_sequence, 'k--', label='Target', linewidth=1.5)
+    axes[1].plot(time, predicted_sequence, 'r-', label='Output', alpha=0.8, linewidth=2)
+    axes[1].plot(time, input_sequence, 'b--', label='Input', linewidth=0.5, alpha=0.5)
+    axes[1].set_ylabel('Target and Pred', fontsize=10)
     axes[1].grid(True, alpha=0.3)
-
-    # Plot prediction
-    axes[2].plot(time, predicted_sequence, 'r-', linewidth=1.5)
-    axes[2].set_ylabel('Predicted', fontsize=10)
-    axes[2].set_xlabel('Time (s)', fontsize=10)
-    axes[2].set_ylim(-0.1, 0.6)
-    axes[2].grid(True, alpha=0.3)
+    axes[1].legend(loc='upper right')
+    axes[1].grid(True, alpha=0.3)
 
     plt.tight_layout()
 
