@@ -1,0 +1,7 @@
+{
+  "analysis": {
+    "n_test_periods": 20,
+    "min_iti": 2.0,
+    "trials_per_period": 1
+  }
+}
