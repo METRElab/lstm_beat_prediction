@@ -107,8 +107,8 @@ class StateAnalyzer:
 
         return np.linspace(min_period, max_period, n_periods)
 
-    @staticmethod
     def run_sequence_step_by_step(
+        self,
         model: BeatPredictionLSTM,
         input_sequence: torch.Tensor
     ) -> Tuple[torch.Tensor, List[np.ndarray], List[np.ndarray]]:
@@ -164,6 +164,8 @@ class StateAnalyzer:
                         Hidden states for each period, timestep, and layer
         - cell_states: Array of shape (n_periods, timesteps, num_layers, hidden_size)
                       Cell states for each period, timestep, and layer
+        - network_outputs: Array of shape (n_periods, timesteps)
+                          Network output predictions for each period and timestep
         - periods: Array of shape (n_periods,)
                   The period value (in seconds) for each sequence
         - mse_per_period: Array of shape (n_periods,)
@@ -171,7 +173,7 @@ class StateAnalyzer:
         - epoch: Scalar, the epoch number of this checkpoint
 
         The first dimension corresponds to different test periods, allowing
-        analysis of how states differ across different beat frequencies.
+        analysis of how states and outputs differ across different beat frequencies.
         """
         # Get all checkpoints
         checkpoint_files = self.get_checkpoint_files()
@@ -182,6 +184,9 @@ class StateAnalyzer:
         # Create model
         model = self.create_model()
         model.to(self.device)
+
+        # Generate test periods
+        test_periods = self.generate_test_periods()
 
         # Prepare config for test data generation
         test_config = self.experiment_config.copy()
@@ -215,6 +220,7 @@ class StateAnalyzer:
             # Store states and MSE for this checkpoint
             hidden_states = []  # Will store states for each period
             cell_states = []    # Will store states for each period
+            network_outputs = []  # Will store network outputs for each period
             mse_per_period = []
 
             # Test each period
@@ -242,17 +248,24 @@ class StateAnalyzer:
                 h_states = np.stack(h_t_list, axis=0)
                 c_states = np.stack(c_t_list, axis=0)
 
+                # Save network output (squeeze to remove batch and feature dims)
+                output_array = outputs.squeeze().cpu().numpy()  # Shape: (timesteps,)
+
                 hidden_states.append(h_states)
                 cell_states.append(c_states)
+                network_outputs.append(output_array)
 
             # Convert lists to arrays
             # Shape: (n_periods, timesteps, num_layers, hidden_size)
             hidden_states = np.array(hidden_states)
             cell_states = np.array(cell_states)
+            # Shape: (n_periods, timesteps)
+            network_outputs = np.array(network_outputs)
 
             # Save states for this checkpoint with detailed data
             # Each saved file contains:
             # - States for all test periods
+            # - Network outputs for all test periods
             # - The period value for each test sequence
             # - MSE performance for each period
             save_path = self.output_dir / f'epoch_{epoch}_states.npz'
@@ -260,11 +273,12 @@ class StateAnalyzer:
                 save_path,
                 hidden_states=hidden_states,  # Shape: (n_periods, timesteps, num_layers, hidden_size)
                 cell_states=cell_states,      # Shape: (n_periods, timesteps, num_layers, hidden_size)
+                network_outputs=network_outputs,  # Shape: (n_periods, timesteps)
                 periods=test_data['periods'],  # Shape: (n_periods,) - period values in seconds
-                mse_per_period=mse_per_period,  # Shape: (n_periods,) - MSE for each period
+                mse_per_period=mse_per_period, # Shape: (n_periods,) - MSE for each period
                 epoch=epoch                    # Scalar - epoch number
             )
-            self.logger.info(f"Saved states to {save_path}")
+            self.logger.info(f"Saved states and outputs to {save_path}")
 
             # Store accuracy progression with periods
             accuracy_progression[str(epoch)] = {
