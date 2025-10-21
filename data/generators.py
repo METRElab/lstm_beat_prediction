@@ -17,7 +17,7 @@ def generate_beat_sequence_rectangle(
     iti: float,
     baseline_value: float = 0.0,
     skip_first_n: int = 0,
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, int]:
     """
     Generate a single beat sequence with its target.
 
@@ -35,6 +35,7 @@ def generate_beat_sequence_rectangle(
     Returns:
         input_sequence: 1D array of input values
         target_sequence: 1D array of target values (shifted earlier by pulse_width)
+        last_pulse_idx: int last pulse index
     """
     n_timesteps = int(sequence_length / dt)
 
@@ -58,6 +59,11 @@ def generate_beat_sequence_rectangle(
         if pulse_end_idx < n_timesteps:
             input_sequence[pulse_start_idx:pulse_end_idx] = pulse_height
 
+    # Find last pulse end idx
+    last_pulse_start_time = start_delay + (n_pulses - 1) * period
+    last_pulse_start_idx = int(last_pulse_start_time / dt)
+    last_pulse_end_idx = last_pulse_start_idx + pulse_samples
+
     # Generate target (prediction) - same as input but shifted earlier
     # Start from pulse index skip_first_n instead of 0
     for i in range(skip_first_n, n_pulses):
@@ -80,7 +86,7 @@ def generate_beat_sequence_rectangle(
     if extra_pulse_start_idx >= 0 and extra_pulse_end_idx < n_timesteps:
         target_sequence[extra_pulse_start_idx:extra_pulse_end_idx] = pulse_height
 
-    return input_sequence, target_sequence
+    return input_sequence, target_sequence, last_pulse_end_idx
 
 
 def calculate_iti(min_iti: float, mean_iti: float) -> float:
@@ -117,7 +123,7 @@ def create_batch_rectangle(
     mean_iti: float,
     baseline_value: float = 0.0,
     skip_first_n: int = 0,
-) -> Tuple[torch.Tensor, torch.Tensor, List[float]]:
+) -> Tuple[torch.Tensor, torch.Tensor, List[float], List[int]]:
     """
     Create a batch of sequences with random periods and ITIs.
 
@@ -139,12 +145,14 @@ def create_batch_rectangle(
         inputs: Batch of input sequences (batch_size, sequence_length, 1)
         targets: Batch of target sequences (batch_size, sequence_length, 1)
         periods: List of periods used for each sequence
+        last_inputs_idx: Index of last input pulse in each sequence (batch_size)
     """
     n_timesteps = int(sequence_length / dt)
 
     # Initialize batch tensors
     inputs = np.zeros((batch_size, n_timesteps, 1))
     targets = np.zeros((batch_size, n_timesteps, 1))
+    last_inputs_idx = []
     periods = []
 
     for i in range(batch_size):
@@ -162,7 +170,7 @@ def create_batch_rectangle(
         iti = calculate_iti(min_iti, mean_iti)
 
         # Generate sequence
-        input_seq, target_seq = generate_beat_sequence_rectangle(
+        input_seq, target_seq, last_input_pulse_idx = generate_beat_sequence_rectangle(
             period=period,
             n_pulses=n_pulses,
             pulse_width=pulse_width,
@@ -177,12 +185,13 @@ def create_batch_rectangle(
         # Add to batch (expand dims for LSTM input)
         inputs[i, :, 0] = input_seq
         targets[i, :, 0] = target_seq
+        last_inputs_idx.append(last_input_pulse_idx)
 
     # Convert to PyTorch tensors
     inputs_tensor = torch.FloatTensor(inputs)
     targets_tensor = torch.FloatTensor(targets)
 
-    return inputs_tensor, targets_tensor, periods
+    return inputs_tensor, targets_tensor, periods, last_inputs_idx
 
 
 def generate_test_sequences_rectangle(
@@ -237,7 +246,7 @@ def generate_test_sequences_rectangle(
             # Calculate ITI for this trial
             iti = calculate_iti(min_iti, mean_iti)
 
-            input_seq, target_seq = generate_beat_sequence_rectangle(
+            input_seq, target_seq, _ = generate_beat_sequence_rectangle(
                 period=period,
                 n_pulses=n_pulses,
                 pulse_width=pulse_width,
@@ -307,7 +316,7 @@ def generate_beat_sequence_gamma(
     gamma_shape: float = 2.5,
     gamma_max_height: Optional[float] = None,
     skip_first_n: int = 2,
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, int]:
     """
     Generate a single beat sequence with gamma-like target distributions.
 
@@ -329,6 +338,7 @@ def generate_beat_sequence_gamma(
     Returns:
         input_sequence: 1D array of input values (rectangular pulses)
         target_sequence: 1D array of target values (gamma-like distributions)
+        last_pulse_end_idx: int, index of the last pulse
     """
     n_timesteps = int(sequence_length / dt)
 
@@ -357,6 +367,11 @@ def generate_beat_sequence_gamma(
         # Add pulse to input if within bounds
         if pulse_end_idx < n_timesteps:
             input_sequence[pulse_start_idx:pulse_end_idx] = pulse_height
+
+    # Find last pulse end idx
+    last_pulse_start_time = start_delay + (n_pulses - 1) * period
+    last_pulse_start_idx = int(last_pulse_start_time / dt)
+    last_pulse_end_idx = last_pulse_start_idx + pulse_samples
 
     # Generate gamma-like curve template
     gamma_curve = gamma_like_curve_numpy(
@@ -390,7 +405,7 @@ def generate_beat_sequence_gamma(
             -output_offset
         )
 
-    return input_sequence, target_sequence
+    return input_sequence, target_sequence, last_pulse_end_idx
 
 
 def create_batch_gamma(
@@ -410,7 +425,7 @@ def create_batch_gamma(
     gamma_shape: float = 2.5,
     gamma_max_height: Optional[float] = None,
     skip_first_n: int = 2,
-) -> Tuple[torch.Tensor, torch.Tensor, List[float]]:
+) -> Tuple[torch.Tensor, torch.Tensor, List[float], List[int]]:
     """
     Create a batch of sequences with gamma-like targets and random periods and ITIs.
 
@@ -436,6 +451,8 @@ def create_batch_gamma(
         inputs: Batch of input sequences (batch_size, sequence_length, 1)
         targets: Batch of target sequences with gamma distributions (batch_size, sequence_length, 1)
         periods: List of periods used for each sequence
+        last_inputs_idx: Index of last input pulse in each sequence (batch_size)
+
     """
     n_timesteps = int(sequence_length / dt)
 
@@ -443,6 +460,7 @@ def create_batch_gamma(
     inputs = np.zeros((batch_size, n_timesteps, 1))
     targets = np.zeros((batch_size, n_timesteps, 1))
     periods = []
+    last_inputs_idx = []
 
     for i in range(batch_size):
         # Random period for this sequence
@@ -453,7 +471,7 @@ def create_batch_gamma(
         iti = calculate_iti(min_iti, mean_iti)
 
         # Generate sequence with gamma targets
-        input_seq, target_seq = generate_beat_sequence_gamma(
+        input_seq, target_seq, last_input_pulse_idx = generate_beat_sequence_gamma(
             period=period,
             n_pulses=n_pulses,
             pulse_width=pulse_width,
@@ -472,12 +490,13 @@ def create_batch_gamma(
         # Add to batch (expand dims for LSTM input)
         inputs[i, :, 0] = input_seq
         targets[i, :, 0] = target_seq
+        last_inputs_idx.append(last_input_pulse_idx)
 
     # Convert to PyTorch tensors
     inputs_tensor = torch.FloatTensor(inputs)
     targets_tensor = torch.FloatTensor(targets)
 
-    return inputs_tensor, targets_tensor, periods
+    return inputs_tensor, targets_tensor, periods, last_inputs_idx
 
 
 def generate_test_sequences_gamma(
@@ -546,7 +565,7 @@ def generate_test_sequences_gamma(
             # Calculate ITI for this trial
             iti = calculate_iti(min_iti, mean_iti)
 
-            input_seq, target_seq = generate_beat_sequence_gamma(
+            input_seq, target_seq, _ = generate_beat_sequence_gamma(
                 period=period,
                 n_pulses=n_pulses,
                 pulse_width=pulse_width,
@@ -576,7 +595,7 @@ def generate_test_sequences_gamma(
 
 def create_batch_from_config(
     config: Dict[str, Any],
-) -> Tuple[torch.Tensor, torch.Tensor, List[float]]:
+) -> Tuple[torch.Tensor, torch.Tensor, List[float], List[int]]:
     """
     Create a batch of sequences using configuration dictionary.
 
@@ -587,6 +606,7 @@ def create_batch_from_config(
         inputs: Batch of input sequences (batch_size, sequence_length, 1)
         targets: Batch of target sequences (batch_size, sequence_length, 1)
         periods: List of periods used for each sequence
+        last_inputs_idx: Index of last pulse in each input sequence
     """
     # Extract common parameters from config
     batch_size = config["training"]["batch_size"]

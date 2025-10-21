@@ -86,20 +86,7 @@ class Trainer:
 
         for _ in range(n_batches_total):
             # Generate batch
-            inputs, targets, _ = create_batch_from_config(self.config)
-            # inputs, targets, _ = create_batch_rectangle(batch_size=batch_size,
-            #                                             min_period=self.config['task']['min_period'],
-            #                                             max_period=self.config['task']['max_period'],
-            #                                             n_pulses=self.config['task']['n_pulses'],
-            #                                             pulse_width=self.config['task']['pulse_width'],
-            #                                             pulse_height=self.config['task']['pulse_height'],
-            #                                             dt=self.config['task']['dt'],
-            #                                             sequence_length=self.config['task']['sequence_length'],
-            #                                             min_iti=self.config['task']['min_iti'],
-            #                                             mean_iti=self.config['task']['mean_iti'],
-            #                                             baseline_value=self.config['task']['baseline_value'])
-
-            # Move to device
+            inputs, targets, _, last_inputs_idx = create_batch_from_config(self.config)
             inputs = inputs.to(self.device)
             targets = targets.to(self.device)
 
@@ -108,6 +95,10 @@ class Trainer:
 
             # Forward pass
             outputs, _ = self.model(inputs)
+
+            if self.config.get("task", {}).get("ignore_tail_error", False):
+                for last_pulse_idx, target_seq, input_seq in zip(last_inputs_idx, targets, inputs):
+                    input_seq[last_pulse_idx:, 0] = target_seq[last_pulse_idx:, 0]
 
             # Calculate loss
             loss = self.criterion(outputs, targets)
@@ -143,14 +134,16 @@ class Trainer:
         with torch.no_grad():
             for _ in range(n_batches_total):
                 # Generate validation batch
-                inputs, targets, _ = create_batch_from_config(self.config)
-
-                # Move to device
+                inputs, targets, _, last_inputs_idx = create_batch_from_config(self.config)
                 inputs = inputs.to(self.device)
                 targets = targets.to(self.device)
 
                 # Forward pass
                 outputs, _ = self.model(inputs)
+
+                if self.config.get("task", {}).get("ignore_tail_error", False):
+                    for last_pulse_idx, target_seq, input_seq in zip(last_inputs_idx, targets, inputs):
+                        input_seq[last_pulse_idx:, 0] = target_seq[last_pulse_idx:, 0]
 
                 # Calculate loss
                 loss = self.criterion(outputs, targets)
