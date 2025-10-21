@@ -127,6 +127,9 @@ class DualSlider3DPlot:
         # Load experiment config to get task parameters
         self.load_experiment_config()
 
+        # Load original state files with outputs
+        self.load_outputs()
+
         # Setup figure
         self.setup_plot()
 
@@ -142,6 +145,23 @@ class DualSlider3DPlot:
         else:
             print(f"Warning: Config file not found at {config_path}")
             self.config = None
+
+    def load_outputs(self):
+        """Load network outputs from original state files."""
+        self.outputs = {}
+        state_analysis_dir = self.pca_dir.parent
+
+        for epoch in self.epochs:
+            state_file = state_analysis_dir / f'epoch_{epoch}_states.npz'
+            if state_file.exists():
+                data = np.load(state_file)
+                if 'network_outputs' in data:
+                    self.outputs[epoch] = data['network_outputs']  # (n_periods, timesteps)
+                else:
+                    print(f"Warning: No outputs found in {state_file}")
+                    self.outputs[epoch] = None
+            else:
+                self.outputs[epoch] = None
 
     def calculate_beat_timesteps(self, period: float) -> list:
         """
@@ -161,7 +181,6 @@ class DualSlider3DPlot:
         dt = task['dt']
         # Use fixed ITI from analysis config (min_iti = mean_iti)
         iti = task['min_iti']
-        iti = 2
 
         beat_timesteps = []
         for i in range(n_pulses):
@@ -196,16 +215,20 @@ class DualSlider3DPlot:
         self.n_periods = len(self.periods)
 
     def setup_plot(self):
-        """Setup the matplotlib figure with 3D axis and sliders."""
-        self.fig = plt.figure(figsize=(12, 10))
+        """Setup the matplotlib figure with output subplot and 3D axis with sliders."""
+        self.fig = plt.figure(figsize=(12, 12))
 
-        # Create 3D axis
-        self.ax = self.fig.add_subplot(111, projection='3d')
-        self.ax.set_position([0.1, 0.3, 0.8, 0.6])
+        # Create output axis at the top
+        self.ax_output = self.fig.add_subplot(211)
+        self.ax_output.set_position([0.1, 0.91, 0.8, 0.1])  # [left, bottom, width, height]
 
-        # Create sliders
-        ax_epoch = plt.axes([0.15, 0.15, 0.7, 0.03])
-        ax_period = plt.axes([0.15, 0.1, 0.7, 0.03])
+        # Create 3D axis below
+        self.ax = self.fig.add_subplot(212, projection='3d')
+        self.ax.set_position([0.1, 0.35, 0.8, 1.65])
+
+        # Create sliders at the bottom
+        ax_epoch = plt.axes([0.15, 0.10, 0.7, 0.03])
+        ax_period = plt.axes([0.15, 0.05, 0.7, 0.03])
 
         self.epoch_slider = Slider(
             ax_epoch, 'Epoch',
@@ -235,9 +258,10 @@ class DualSlider3DPlot:
         self.update_plot(None)
 
     def update_plot(self, val):
-        """Update the 3D plot based on slider values."""
-        # Clear previous plot
+        """Update both output and 3D plots based on slider values."""
+        # Clear previous plots
         self.ax.clear()
+        self.ax_output.clear()
 
         # Get current indices
         epoch_idx = int(self.epoch_slider.val)
@@ -253,6 +277,54 @@ class DualSlider3DPlot:
         mse = data['mse'][period_idx]
         explained_var = data['explained_variance'][period_idx]
 
+        # Calculate beat timesteps
+        beat_timesteps = self.calculate_beat_timesteps(period)
+
+        # Plot output if available
+        if epoch in self.outputs and self.outputs[epoch] is not None:
+            output = self.outputs[epoch][period_idx]  # (timesteps,)
+            timesteps = len(output)
+
+            if self.config:
+                dt = self.config['task']['dt']
+                time_axis = np.arange(timesteps) * dt
+                self.ax_output.plot(time_axis, output, 'b-', linewidth=1.5, label='Network Output')
+                self.ax_output.set_xlabel('Time (s)')
+            else:
+                self.ax_output.plot(output, 'b-', linewidth=1.5, label='Network Output')
+                self.ax_output.set_xlabel('Timesteps')
+
+            # Add beat markers on output plot
+            if beat_timesteps:
+                valid_beats = [t for t in beat_timesteps if t < len(output)]
+                if valid_beats:
+                    if self.config:
+                        beat_times = [t * dt for t in valid_beats]
+                        beat_values = output[valid_beats]
+                        self.ax_output.scatter(
+                            beat_times, beat_values,
+                            c='red', s=100, marker='*',
+                            edgecolors='darkred', linewidths=2,
+                            label=f'Beats (n={len(valid_beats)})', zorder=5
+                        )
+                    else:
+                        self.ax_output.scatter(
+                            valid_beats, output[valid_beats],
+                            c='red', s=100, marker='*',
+                            edgecolors='darkred', linewidths=2,
+                            label=f'Beats (n={len(valid_beats)})', zorder=5
+                        )
+
+            self.ax_output.set_ylabel('Output Value')
+            self.ax_output.set_title(f'Network Output - Epoch {epoch}, Period {period:.3f}s, MSE: {mse:.6f}')
+            self.ax_output.grid(True, alpha=0.3)
+            self.ax_output.legend(loc='upper right')
+        else:
+            self.ax_output.text(0.5, 0.5, 'Output data not available\nRe-run analyze_states.py to include outputs',
+                              ha='center', va='center', transform=self.ax_output.transAxes)
+            self.ax_output.set_title(f'Network Output - Epoch {epoch}, Period {period:.3f}s')
+
+        # Plot 3D trajectory (existing code)
         # Create time-based colors
         timesteps = len(trajectory)
         colors = plt.cm.viridis(np.linspace(0, 1, timesteps))
@@ -286,8 +358,7 @@ class DualSlider3DPlot:
             c='red', s=100, marker='s', label='End'
         )
 
-        # Add beat markers
-        beat_timesteps = self.calculate_beat_timesteps(period)
+        # Add beat markers on 3D trajectory
         if beat_timesteps:
             # Ensure beat timesteps are within trajectory length
             valid_beats = [t for t in beat_timesteps if t < len(trajectory)]
@@ -326,8 +397,7 @@ class DualSlider3DPlot:
         # Set title
         total_var = explained_var.sum()
         self.ax.set_title(
-            f'{self.state_type.capitalize()} States - Epoch {epoch}, Period {period:.3f}s\n' +
-            f'MSE: {mse:.6f} | Total Variance Explained: {total_var:.3f}',
+            f'{self.state_type.capitalize()} States | Total Variance Explained: {total_var:.3f}',
             fontsize=12
         )
 
