@@ -2,16 +2,18 @@
 Training utilities for LSTM beat prediction model.
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import logging
 from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
+from torch.optim.optimizer import Optimizer
 
 from models import BeatPredictionLSTM
 from data import create_batch_from_config
+from .lr_scheduler import BidirectionalLRScheduler
 
 
 class Trainer:
@@ -50,6 +52,24 @@ class Trainer:
             self.model.parameters(),
             lr=config['training']['learning_rate']
         )
+
+        # Setup learning rate scheduler if enabled
+        self.scheduler = None
+        if config['training'].get('use_scheduler', False):
+            scheduler_config = config['training'].get('scheduler', {})
+            self.scheduler = BidirectionalLRScheduler(
+                optimizer=self.optimizer,
+                increase_factor=scheduler_config.get('increase_factor', 1.3),
+                decrease_factor=scheduler_config.get('decrease_factor', 0.7),
+                max_lr=scheduler_config.get('max_lr', 0.1),
+                min_lr=scheduler_config.get('min_lr', 1e-7),
+                patience_up=scheduler_config.get('patience_up', 3),
+                patience_down=scheduler_config.get('patience_down', 5),
+                threshold=scheduler_config.get('threshold', 0.001),
+                verbose=scheduler_config.get('verbose', True),
+                logger=self.logger
+            )
+            self.logger.info("Bidirectional LR scheduler enabled")
 
         # Setup loss function
         self.criterion = nn.MSELoss()
@@ -211,7 +231,8 @@ class Trainer:
         history = {
             'train_losses': [],
             'val_losses': [],
-            'epochs': []
+            'epochs': [],
+            'learning_rates': []
         }
 
         self.logger.info(f"Starting training for {n_epochs} epochs")
@@ -225,15 +246,24 @@ class Trainer:
             # Validate
             val_loss = self.validate()
 
+            # Get current learning rate
+            current_lr = self.optimizer.param_groups[0]['lr']
+
+            # Adjust learning rate if scheduler is enabled
+            if self.scheduler:
+                current_lr = self.scheduler.step(val_loss)
+
             # Store history
             history['train_losses'].append(train_loss)
             history['val_losses'].append(val_loss)
             history['epochs'].append(epoch)
+            history['learning_rates'].append(current_lr)
 
             # Log to tensorboard
             if self.writer:
                 self.writer.add_scalar('Loss/train', train_loss, epoch)
                 self.writer.add_scalar('Loss/validation', val_loss, epoch)
+                self.writer.add_scalar('Learning_rate', current_lr, epoch)
 
             # Check if best model
             is_best = val_loss < self.best_loss
@@ -246,12 +276,16 @@ class Trainer:
 
             # Log progress
             if epoch % log_interval == 0 or is_best:
-                self.logger.info(
+                log_msg = (
                     f"Epoch {epoch}/{n_epochs} | "
                     f"Train Loss: {train_loss:.6f} | "
                     f"Val Loss: {val_loss:.6f} | "
-                    f"Best: {self.best_loss:.6f}"
+                    f"Best: {self.best_loss:.6f} | "
+                    f"LR: {current_lr:.6f} | "
+                    f"wait d: {self.scheduler.wait_count_down} | "
+                    f"wait u: {self.scheduler.wait_count_up}"
                 )
+                self.logger.info(log_msg)
 
         # Close tensorboard writer
         if self.writer:

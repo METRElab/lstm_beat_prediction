@@ -3,7 +3,6 @@ import torch.optim as optim
 import logging
 from torch.optim.optimizer import Optimizer
 
-
 class BidirectionalLRScheduler:
     """
     A learning rate scheduler that adjusts LR bidirectionally based on loss changes.
@@ -49,6 +48,7 @@ class BidirectionalLRScheduler:
         self.patience_down = patience_down
         self.threshold = threshold
         self.verbose = verbose
+        self.logger = logger
 
         self.best_loss = float('inf')
         self.last_loss = float('inf')
@@ -79,7 +79,7 @@ class BidirectionalLRScheduler:
                 self.wait_count_up = 0
 
                 if self.verbose:
-                    print(f"Loss increased. LR: {current_lr:.6f} -> {new_lr:.6f}")
+                    self.logger.info(f"Loss increased. LR: {current_lr:.6f} -> {new_lr:.6f}")
 
         # Check if loss decreased significantly
         elif current_loss < self.best_loss * (1 - self.threshold):
@@ -93,7 +93,7 @@ class BidirectionalLRScheduler:
                 self.wait_count_down = 0
 
                 if self.verbose:
-                    print(f"Loss decreased. LR: {current_lr:.6f} -> {new_lr:.6f}")
+                    self.logger.info(f"Loss decreased. LR: {current_lr:.6f} -> {new_lr:.6f}")
 
         # Update best loss
         if current_loss < self.best_loss:

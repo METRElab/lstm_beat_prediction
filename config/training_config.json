@@ -13,11 +13,22 @@
   "training": {
     "epochs": 10000,
     "batch_size": 50,
-    "learning_rate": 0.001,
+    "learning_rate": 0.007,
     "trials_per_epoch": 1000,
     "validation_trials": 100,
     "checkpoint_best_only": true,
-    "optimizer": "adam"
+    "optimizer": "adam",
+    "use_scheduler": true,
+    "scheduler": {
+      "increase_factor": 1.1,
+      "decrease_factor": 0.9,
+      "max_lr": 0.1,
+      "min_lr": 1e-7,
+      "patience_up": 3,
+      "patience_down": 7,
+      "threshold": 0.01,
+      "verbose": true
+    }
   },
   "task": {
     "min_period": 0.4,
@@ -32,7 +43,7 @@
     "mean_iti": 2.0,
     "target_type": "rectangle",
     "output_offset": -0.5,
-    "skip_first_n": 2,
+    "skip_first_n": 0,
     "ignore_tail_error": true,
     "gamma_params": {
       "gamma_length": 0.2,
