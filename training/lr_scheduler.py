@@ -16,10 +16,12 @@ class BidirectionalLRScheduler:
             optimizer: Optimizer,
             increase_factor: float = 1.5,
             decrease_factor: float = 0.7,
+            still_factor: float = 0.1,
             max_lr: float = 1.0,
             min_lr: float = 1e-7,
             patience_up: int = 3,
             patience_down: int = 5,
+            patience_still: int = 10,
             threshold: float = 0.001,
             verbose: bool = False,
             logger: logging.Logger = None
@@ -31,10 +33,12 @@ class BidirectionalLRScheduler:
             optimizer: PyTorch optimizer instance
             increase_factor: Multiplicative factor for increasing LR
             decrease_factor: Multiplicative factor for decreasing LR
+            still_factor: Multiplicative factor for increasing LR when no chnages happen
             max_lr: Maximum allowed learning rate
             min_lr: Minimum allowed learning rate
             patience_up: Number of epochs to wait before increasing LR
             patience_down: Number of epochs to wait before decreasing LR
+            patience_still: Number of epochs to wait before increasing LR when no changes happen
             threshold: Minimum relative change in loss to trigger adjustment
             verbose: Whether to print LR changes
             logger: Logger instance
@@ -42,10 +46,12 @@ class BidirectionalLRScheduler:
         self.optimizer = optimizer
         self.increase_factor = increase_factor
         self.decrease_factor = decrease_factor
+        self.still_factor = still_factor
         self.max_lr = max_lr
         self.min_lr = min_lr
         self.patience_up = patience_up
         self.patience_down = patience_down
+        self.patience_still = patience_still
         self.threshold = threshold
         self.verbose = verbose
         self.logger = logger
@@ -54,6 +60,7 @@ class BidirectionalLRScheduler:
         self.last_loss = float('inf')
         self.wait_count_up = 0
         self.wait_count_down = 0
+        self.wait_count_still = 0
 
     def step(self, current_loss: float) -> float:
         """
@@ -71,6 +78,7 @@ class BidirectionalLRScheduler:
         if current_loss > self.last_loss * (1 + self.threshold):
             self.wait_count_up += 1
             self.wait_count_down = 0
+            self.wait_count_still = 0
 
             if self.wait_count_up >= self.patience_up:
                 # Increase learning rate
@@ -85,6 +93,7 @@ class BidirectionalLRScheduler:
         elif current_loss < self.best_loss * (1 - self.threshold):
             self.wait_count_down += 1
             self.wait_count_up = 0
+            self.wait_count_still = 0
 
             if self.wait_count_down >= self.patience_down:
                 # Decrease learning rate
@@ -94,6 +103,19 @@ class BidirectionalLRScheduler:
 
                 if self.verbose:
                     self.logger.info(f"Loss decreased. LR: {current_lr:.6f} -> {new_lr:.6f}")
+
+        # Check if loss decreased significantly
+        else:
+            self.wait_count_still += 1
+
+            if self.wait_count_still >= self.patience_still:
+                # Decrease learning rate
+                new_lr = min(current_lr * self.still_factor, self.max_lr)
+                self._set_lr(new_lr)
+                self.wait_count_still = 0
+
+                if self.verbose:
+                    self.logger.info(f"Loss increased. LR: {current_lr:.6f} -> {new_lr:.6f}")
 
         # Update best loss
         if current_loss < self.best_loss:

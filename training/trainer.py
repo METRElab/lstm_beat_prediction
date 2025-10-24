@@ -61,10 +61,12 @@ class Trainer:
                 optimizer=self.optimizer,
                 increase_factor=scheduler_config.get('increase_factor', 1.3),
                 decrease_factor=scheduler_config.get('decrease_factor', 0.7),
+                still_factor=scheduler_config.get('still_factor', 0.1),
                 max_lr=scheduler_config.get('max_lr', 0.1),
                 min_lr=scheduler_config.get('min_lr', 1e-7),
                 patience_up=scheduler_config.get('patience_up', 3),
                 patience_down=scheduler_config.get('patience_down', 5),
+                patience_still=scheduler_config.get('patience_still', 10),
                 threshold=scheduler_config.get('threshold', 0.001),
                 verbose=scheduler_config.get('verbose', True),
                 logger=self.logger
@@ -283,7 +285,8 @@ class Trainer:
                     f"Best: {self.best_loss:.6f} | "
                     f"LR: {current_lr:.6f} | "
                     f"wait d: {self.scheduler.wait_count_down} | "
-                    f"wait u: {self.scheduler.wait_count_up}"
+                    f"wait u: {self.scheduler.wait_count_up} | "
+                    f"wait s: {self.scheduler.wait_count_still}"
                 )
                 self.logger.info(log_msg)
 
