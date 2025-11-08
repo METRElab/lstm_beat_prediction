@@ -180,7 +180,7 @@ class DualSlider3DPlot:
         n_pulses = task['n_pulses']
         dt = task['dt']
         # Use fixed ITI from analysis config (min_iti = mean_iti)
-        iti = task['min_iti']
+        iti = 2
 
         beat_timesteps = []
         for i in range(n_pulses):
@@ -219,12 +219,10 @@ class DualSlider3DPlot:
         self.fig = plt.figure(figsize=(12, 12))
 
         # Create output axis at the top
-        self.ax_output = self.fig.add_subplot(211)
-        self.ax_output.set_position([0.1, 0.91, 0.8, 0.1])  # [left, bottom, width, height]
+        self.ax_output = self.fig.add_axes([0.1, 0.85, 0.8, 0.08])
 
         # Create 3D axis below
-        self.ax = self.fig.add_subplot(212, projection='3d')
-        self.ax.set_position([0.1, 0.35, 0.8, 1.65])
+        self.ax = self.fig.add_axes([0.1, 0.18, 0.8, 0.65], projection='3d')
 
         # Create sliders at the bottom
         ax_epoch = plt.axes([0.15, 0.10, 0.7, 0.03])
@@ -365,18 +363,13 @@ class DualSlider3DPlot:
 
             if valid_beats:
                 beat_points = trajectory[valid_beats]
-                self.ax.scatter(
-                    beat_points[:, 0],
-                    beat_points[:, 1],
-                    beat_points[:, 2],
-                    c='red',
-                    s=150,
-                    marker='*',
-                    edgecolors='darkred',
-                    linewidths=2,
-                    label=f'Beats (n={len(valid_beats)})',
-                    zorder=5  # Ensure beats appear on top
-                )
+                # Add beat numbers instead of stars
+                for i, beat_idx in enumerate(valid_beats, 1):
+                    beat_point = trajectory[beat_idx]
+                    self.ax.text(beat_point[0], beat_point[1], beat_point[2], str(i),
+                                 color='red', fontsize=12, fontweight='bold',
+                                 ha='center', va='center',
+                                 bbox=dict(boxstyle='circle,pad=0.2', facecolor='yellow', alpha=0.8))
 
                 # Add vertical lines from beat points to show timing
                 for i, beat_idx in enumerate(valid_beats):
