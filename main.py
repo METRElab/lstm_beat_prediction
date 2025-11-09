@@ -206,7 +206,7 @@ def test(config_path: str, checkpoint_name: str = 'best_model.pth') -> None:
             predicted_sequence=pred_numpy,
             period=period,
             dt=config['task']['dt'],
-            save_path=str(figures_dir / f'test_period_{period:.2f}.png'),
+            save_path=str(figures_dir / f'test_period_{period:.2f}_{i}.png'),
             show=False
         )
 
