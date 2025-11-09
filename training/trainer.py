@@ -284,9 +284,9 @@ class Trainer:
                     f"Val Loss: {val_loss:.6f} | "
                     f"Best: {self.best_loss:.6f} | "
                     f"LR: {current_lr:.6f} | "
-                    f"wait d: {self.scheduler.wait_count_down} | "
-                    f"wait u: {self.scheduler.wait_count_up} | "
-                    f"wait s: {self.scheduler.wait_count_still}"
+                    f"wait d: {self.scheduler.wait_count_down if self.scheduler else 0} | "
+                    f"wait u: {self.scheduler.wait_count_up if self.scheduler else 0} | "
+                    f"wait s: {self.scheduler.wait_count_still if self.scheduler else 0}"
                 )
                 self.logger.info(log_msg)
 
