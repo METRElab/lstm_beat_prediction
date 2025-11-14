@@ -1,0 +1,8 @@
+{
+  "analysis": {
+    "trials_per_tempo": 10,
+    "n_test_periods": 1,
+    "save_transformed_data": false,
+    "n_components": 3
+  }
+}
