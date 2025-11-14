@@ -274,3 +274,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+# python main.py --test --config experiments/20251109_005252/config.json --checkpoint checkpoint_epoch_4713.pth
