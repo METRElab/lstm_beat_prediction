@@ -43,7 +43,6 @@ st.markdown(f"**Noise Levels:** Phase = {st.session_state.phase_noise:.3f}, Jitt
 def load_model_runner(experiment_path):
     return ModelRunner(Path(experiment_path))
 
-
 model_runner = load_model_runner(st.session_state.experiment_path)
 
 # Sidebar for model controls
@@ -83,74 +82,73 @@ with st.sidebar.expander("Available Epochs"):
             st.markdown(f"  {epoch}")
 
 # Main content area
-tab1, tab2, tab3 = st.tabs(["🎹 Input Configuration", "📈 Results", "🔧 Advanced"])
+tab1, tab2 = st.tabs(["🎹 Model Interface", "🔧 Advanced"])
 
 with tab1:
-    st.markdown("### Configure Input Parameters")
+    # Compact input configuration section
+    st.markdown("### Input Configuration")
 
-    col1, col2, col3 = st.columns(3)
+    # All inputs in one row
+    col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
 
     with col1:
         first_beat_time = st.number_input(
-            "First beat time (seconds):",
+            "First beat time (s)",
             min_value=0.0,
             max_value=5.0,
             value=0.2,
-            step=0.05,
-            help="First beat time of the trial"
-        )
-
-        tempo = st.number_input(
-            "Tempo (seconds):",
-            min_value=0.1,
-            max_value=2.0,
-            value=0.5,
-            step=0.05,
-            help="Base period between beats"
-        )
-
-        n_pulses = st.number_input(
-            "Number of Pulses:",
-            min_value=3,
-            max_value=20,
-            value=5,
-            step=1,
-            help="Number of beats to generate"
+            step=0.05
         )
 
     with col2:
+        tempo = st.number_input(
+            "Tempo (s)",
+            min_value=0.1,
+            max_value=2.0,
+            value=0.5,
+            step=0.05
+        )
+
+    with col3:
+        n_pulses = st.number_input(
+            "# Pulses",
+            min_value=3,
+            max_value=10,
+            value=5,
+            step=1
+        )
+
+    with col4:
         sequence_length = st.number_input(
-            "Sequence Length (seconds):",
+            "Length (s)",
             min_value=1.0,
             max_value=15.0,
             value=7.0,
-            step=0.5,
-            help="Total duration of the sequence"
+            step=0.5
         )
 
+    with col5:
         phase_noise_input = st.number_input(
-            "Phase Noise STD:",
+            "Phase σ",
             min_value=0.0,
             max_value=0.1,
             value=0.01,
             step=0.005,
-            format="%.3f",
-            help="Standard deviation of phase noise"
+            format="%.3f"
         )
 
-    with col3:
+    with col6:
         jitter_noise_input = st.number_input(
-            "Jitter Noise STD:",
+            "Jitter σ",
             min_value=0.0,
             max_value=0.1,
             value=0.005,
             step=0.005,
-            format="%.3f",
-            help="Standard deviation of jitter noise"
+            format="%.3f"
         )
 
-        st.markdown("")  # Spacer
-        generate_btn = st.button("🎲 Generate Pulse Times", type="primary", use_container_width=True)
+    with col7:
+        generate_btn = st.button("🎲 Generate", type="secondary", use_container_width=True)
 
     # Generate or display pulse times
     if generate_btn or 'pulse_times' not in st.session_state:
@@ -163,40 +161,29 @@ with tab1:
         )
         st.session_state.pulse_times = pulse_times
 
-    # Display and allow editing of pulse times
-    st.markdown("### Pulse Times (seconds)")
-    st.info("You can edit these values directly. The model will use whatever you specify.")
+    # Pulse times editor in a more compact format
+    col1, col2 = st.columns([4, 1])
 
-    # Convert to string for editing
-    pulse_times_str = ', '.join([f"{t:.3f}" for t in st.session_state.pulse_times])
+    with col1:
+        # Convert to string for editing
+        pulse_times_str = ', '.join([f"{t:.3f}" for t in st.session_state.pulse_times])
 
-    edited_times_str = st.text_area(
-        "Edit pulse times (comma-separated):",
-        value=pulse_times_str,
-        height=100,
-        help="Enter comma-separated values in seconds"
-    )
+        edited_times_str = st.text_input(
+            "Pulse times (seconds, comma-separated):",
+            value=pulse_times_str,
+            help="Edit directly or use Generate button"
+        )
 
-    # Parse edited times
-    try:
-        edited_times = [float(t.strip()) for t in edited_times_str.split(',') if t.strip()]
-        st.session_state.pulse_times = edited_times
-        st.success(f"✅ {len(edited_times)} pulse times ready")
-    except ValueError as e:
-        st.error(f"Invalid format: {e}")
+        # Parse edited times
+        try:
+            edited_times = [float(t.strip()) for t in edited_times_str.split(',') if t.strip()]
+            st.session_state.pulse_times = edited_times
+        except ValueError as e:
+            st.error(f"Invalid format: {e}")
 
-    # Display parsed times
-    with st.expander("View Parsed Times"):
-        for i, t in enumerate(st.session_state.pulse_times):
-            st.text(f"Pulse {i+1}: {t:.3f} seconds")
-
-    # Run model button
-    st.markdown("### Run Model")
-    run_col1, run_col2 = st.columns([3, 1])
-
-    with run_col1:
+    with col2:
         if st.button("🚀 Run Model", type="primary", use_container_width=True):
-            with st.spinner("Loading model and running inference..."):
+            with st.spinner("Running..."):
                 # Load checkpoint
                 model_runner.load_checkpoint(selected_epoch)
 
@@ -236,19 +223,22 @@ with tab1:
                     'epoch': selected_epoch
                 }
 
-                st.success("✅ Model execution complete!")
+                st.success("✅ Complete!")
                 st.rerun()
 
-with tab2:
-    st.markdown("### Model Results")
+    # Results section (only show if results exist)
+    if 'results' in st.session_state:
+        st.markdown("---")
+        st.markdown("### Results")
 
-    if 'results' not in st.session_state:
-        st.info("👈 Configure input and run the model first")
-    else:
         results = st.session_state.results
 
         # Input/Output plot
-        st.markdown("#### Input and Output Signals")
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.markdown("#### Input/Output Signals")
+        with col2:
+            st.info(f"Epoch {results['epoch']} | {len(results['pulse_times'])} pulses")
 
         fig = plot_input_output(
             input_seq=results['input'],
@@ -261,29 +251,29 @@ with tab2:
         # 3D State visualization
         st.markdown("#### 3D State Trajectory")
 
-        col1, col2, col3 = st.columns([1, 1, 1])
+        col1, col2, col3 = st.columns([1, 1, 2])
         with col1:
             state_type = st.radio(
                 "State Type:",
-                ["Hidden States", "Cell States"],
+                ["Hidden", "Cell"],
                 horizontal=True
             )
 
         with col2:
-            show_beats = st.checkbox("Show Beat Markers", value=True)
+            show_beats = st.checkbox("Show Beats", value=True)
 
         with col3:
-            st.info(f"Epoch {results['epoch']}")
+            # Trajectory stats in same row
+            if state_type == "Hidden":
+                states_to_plot = results['hidden_pca']
+            else:
+                states_to_plot = results['cell_pca']
 
-        # Select which states to show
-        if state_type == "Hidden States":
-            states_to_plot = results['hidden_pca']
-            title = f"Hidden States - Epoch {results['epoch']}"
-        else:
-            states_to_plot = results['cell_pca']
-            title = f"Cell States - Epoch {results['epoch']}"
+            # traj_length = np.sum(np.linalg.norm(np.diff(states_to_plot, axis=0), axis=1))
+            # st.metric("Trajectory Length", f"{traj_length:.2f}")
 
         # Create 3D plot
+        title = f"{state_type} States - Epoch {results['epoch']}"
         fig_3d = create_3d_trajectory(
             states_pca=states_to_plot,
             pulse_times=results['pulse_times'] if show_beats else None,
@@ -294,21 +284,10 @@ with tab2:
         )
 
         st.plotly_chart(fig_3d, use_container_width=True)
+    else:
+        st.info("👆 Configure input and click 'Run Model' to see results")
 
-        # Statistics
-        with st.expander("📊 Trajectory Statistics"):
-            col1, col2, col3 = st.columns(3)
-
-            with col1:
-                st.metric("Trajectory Length", f"{np.sum(np.linalg.norm(np.diff(states_to_plot, axis=0), axis=1)):.3f}")
-
-            with col2:
-                st.metric("Mean Speed", f"{np.mean(np.linalg.norm(np.diff(states_to_plot, axis=0), axis=1)):.3f}")
-
-            with col3:
-                st.metric("Max Distance from Origin", f"{np.max(np.linalg.norm(states_to_plot, axis=1)):.3f}")
-
-with tab3:
+with tab2:
     st.markdown("### Advanced Settings")
 
     if 'results' in st.session_state:

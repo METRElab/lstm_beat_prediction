@@ -31,7 +31,7 @@ def plot_input_output(
     time_axis = np.arange(n_timesteps) * dt
 
     # Create figure
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 3), sharex=True)
 
     # Plot input
     ax1.plot(time_axis, input_seq, 'b-', linewidth=1.5, label='Input')
