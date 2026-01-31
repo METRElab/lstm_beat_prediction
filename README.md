@@ -1,199 +1,188 @@
-# LSTM Beat Prediction with Temporal Noise Analysis
+# LSTM Beat Prediction: Synchronization-Continuation Task
+
+A computational framework for training and analyzing LSTM networks on rhythmic timing tasks, inspired by the Merchant Lab's work on neural mechanisms of beat synchronization in primates.
 
 ## Overview
 
-This repository contains a comprehensive framework for training and analyzing LSTM networks on beat prediction tasks with varying levels of temporal noise. The system explores how neural networks learn to anticipate rhythmic patterns under different noise conditions, providing deep insights into the internal dynamics through interactive visualizations.
+This repository implements an LSTM-based model that learns to:
+1. **Attend** to rhythmic stimuli without responding
+2. **Synchronize** predictions with ongoing beats
+3. **Continue** predicting beats after stimuli stop
+
+This three-phase structure mirrors the synchronization-continuation paradigm used in primate neurophysiology research to study internal timing mechanisms.
+
+> 📖 **For detailed information about the Merchant Lab experiments and how this implementation aligns with their methodology, see [MERCHANT_EXPERIMENT.md](MERCHANT_EXPERIMENT.md)**
 
 ## Key Features
 
-### 🧠 Neural Network Architecture
-
-- LSTM-based models for temporal beat prediction
-- Configurable architecture (layers, hidden units, dropout)
-- Support for multiple target types (rectangular, gamma, gaussian distributions)
-
-### 🎵 Beat Prediction Task
-
-- Networks learn to predict beats before they occur
-- Input: Sequences of isochronous beats with configurable timing
-- Output: Anticipatory signals that predict upcoming beats
-- Temporal noise injection (phase noise and jitter) to test robustness
-
-### 📊 Analysis Pipeline
-
-- **State Analysis**: Extract and save hidden/cell states during inference
-- **PCA Dimensionality Reduction**: Project high-dimensional states to 3D for visualization
-- **Interactive Visualization**: Streamlit app for real-time model exploration
-
-## Repository Structure
+### Task Structure
 
 ```
-├── models/                 # LSTM model definitions
-├── data/                   # Data generators for beat sequences
-├── training/               # Training utilities and trainer classes
-├── analysis/              
-│   ├── save_pca_models.py     # Compute PCA for state space analysis
-│   ├── state_analyzer.py      # Extract states from trained models
-│   └── interactive_sliders.py # Matplotlib-based visualizations
-├── pages/                  # Streamlit app pages
-│   ├── 1_Experiment_Selection.py
-│   └── 2_Visualization.py
-├── utils/                  # Utility functions
-├── config/                 # Configuration files
-└── app.py                  # Main Streamlit application
+[Attention Phase]     [Synchronization Phase]    [Continuation Phase]     [Tail]
+     ●  ●  ●              ●  ●  ●  ●  ●               (no input)           ...
+   Input only          Input + Target              Target only           Ignored
+   (learn tempo)       (predict beats)          (maintain tempo)
 ```
+
+### Neural Network
+
+- LSTM-based architecture for temporal sequence learning
+- Configurable hidden size, layers, and dropout
+- Step-by-step state extraction for trajectory analysis
+
+### Analysis Pipeline
+
+- PCA dimensionality reduction of hidden states
+- Interactive 3D trajectory visualization
+- Phase-aware performance metrics
 
 ## Installation
 
 ```bash
-# Clone the repository
 git clone <repository-url>
 cd lstm-beat-prediction
 
-# Install dependencies
 pip install -r requirements.txt
-pip install -r requirements_ui.txt
+pip install -r requirements_ui.txt  # For visualization app
 ```
 
-## Usage
+## Quick Start
 
-### 1. Training Models
-
-Train models with different noise levels:
+### 1. Train a Model
 
 ```bash
-python main.py --train --config config/default_config.json
+python main.py --train --config training_config_sync_continuation.json
 ```
 
-### 2. Analyzing Trained Models
-
-#### Extract States and Compute PCA
-
-For experiments with gaussian noise:
+### 2. Test a Trained Model
 
 ```bash
-# Compute PCA models for all checkpoints
-python analysis/save_pca_models.py --base_dir experiments/gaussian_noise
+python main.py --test --config experiments/sync_continuation/<timestamp>/config.json --checkpoint checkpoint_epoch_XXXX.pth
 ```
 
-For standard experiments:
-
-```bash
-# Analyze states across checkpoints
-python analyze_states.py --experiment_path experiments/[timestamp] --analysis_config config/analysis_config.json
-
-# Preprocess with PCA
-python analysis/preprocess_pca.py --experiment_path experiments/[timestamp]
-```
-
-### 3. Interactive Visualization
-
-Launch the Streamlit app:
+### 3. Visualize Results
 
 ```bash
 streamlit run app.py
 ```
 
-#### Using the Visualization App:
+## Repository Structure
 
-1. **Experiment Selection**
-   - Navigate to "Experiment Selection" page
-   - Enter the base directory containing experiments
-   - Select phase and jitter noise levels from dropdowns
-   - Click "Go to Visualization"
+```
+├── models/
+│   └── lstm_model.py           # LSTM architecture
+├── data/
+│   └── generators.py           # Sequence generation (sync-continuation task)
+├── training/
+│   └── trainer.py              # Training loop with phase-aware loss masking
+├── analysis/
+│   ├── save_pca_models.py      # PCA for state space analysis
+│   └── state_analyzer.py       # Hidden state extraction
+├── utils/
+│   ├── visualization.py        # Plotting functions
+│   └── viz_utils.py            # 3D trajectory visualization
+├── pages/                      # Streamlit app pages
+├── app.py                      # Main Streamlit application
+├── main.py                     # Training/testing entry point
+├── training_config_sync_continuation.json  # Default config
+├── README.md                   # This file
+└── MERCHANT_EXPERIMENT.md      # Detailed experiment documentation
+```
 
-2. **Model Interaction**
-   - Use the epoch slider to select different training stages
-   - Configure input parameters (tempo, pulses, noise levels)
-   - Generate pulse sequences or manually specify exact timings
-   - Click "Run Model" to execute
+## Configuration
 
-3. **Results Analysis**
-   - View 2D plots showing input/output signals with inter-pulse intervals
-   - Explore 3D PCA-transformed state trajectories
-   - Hover over trajectory points to see input/output values
-   - Toggle between hidden and cell states
-   - Beat markers show where pulses occur in the state space
+Key parameters in `training_config_sync_continuation.json`:
+
+```json
+{
+  "task": {
+    "task_type": "sync_continuation",
+    
+    "min_period": 0.450,
+    "max_period": 0.850,
+    "period_step": 0.100,
+    
+    "attention_phase": { "min_n_pulses": 2, "max_n_pulses": 3 },
+    "sync_phase": { "min_n_pulses": 5, "max_n_pulses": 6 },
+    "continuation_phase": { "min_n_pulses": 3, "max_n_pulses": 5 },
+    
+    "skip_first_n_sync": 1,
+    "ignore_skipped_sync_error": true,
+    "ignore_attention_error": true,
+    "ignore_tail_error": true
+  }
+}
+```
+
+| Parameter | Description |
+|-----------|-------------|
+| `period_step` | Discrete tempo intervals (e.g., 450, 550, 650, 750, 850 ms) |
+| `attention_phase` | Pulses to observe before predicting |
+| `sync_phase` | Pulses to predict with input present |
+| `continuation_phase` | Pulses to predict without input |
+| `skip_first_n_sync` | First sync pulses excluded from targets (transition) |
+| `ignore_skipped_sync_error` | Don't penalize outputs during skipped sync pulses |
+| `ignore_attention_error` | Don't penalize outputs during attention |
+| `ignore_tail_error` | Don't penalize outputs after continuation |
+
+## Training vs Testing Periods
+
+- **Training**: 5 discrete periods (450, 550, 650, 750, 850 ms)
+- **Testing**: 9 periods including interpolation (450, 500, 550, ..., 850 ms)
+
+This tests generalization to untrained tempos.
 
 ## Visualization Features
 
-### 📈 2D Signal Plots
+### 2D Signal Plots
+- Input/output waveforms with phase boundaries
+- Phase shading (attention=blue, sync=green, continuation=orange)
+- Beat markers and timing annotations
 
-- Input and output waveforms
-- Beat markers at pulse onset times
-- Inter-pulse interval measurements
-- Real-time comparison of model predictions
-
-### 🌐 3D State Trajectories
-
-- PCA-reduced neural state visualization
-- Interactive rotation, zoom, and pan
+### 3D State Trajectories
+- PCA-reduced hidden state visualization
 - Time-based color gradients
-- Beat event markers in state space
-- Hover information showing:
-  - Time point
-  - PCA coordinates (PC1, PC2, PC3)
-  - Input value at that timestep
-  - Network output at that timestep
-
-### 🎛️ Interactive Controls
-
-- Epoch selection slider
-- Noise parameter adjustment
-- Manual pulse time editing
-- State type selection (hidden/cell)
-- Beat marker visibility toggle
-
-## Experiment Organization
-
-Experiments are organized by noise levels:
-
-```
-experiments/gaussian_noise/
-├── 20251109_160331_p0.005_j0.01/  # Phase=0.005, Jitter=0.01
-│   ├── checkpoints/                # Model checkpoints
-│   ├── pca_models/                 # PCA transformations
-│   └── config.json                 # Experiment configuration
-└── ...
-```
+- Interactive rotation and zoom
+- Beat event markers
 
 ## Technical Details
 
-### Noise Models
+### Phase-Aware Loss Masking
 
-- **Phase Noise**: Cumulative timing drift affecting all subsequent beats
-- **Jitter**: Individual random variations per beat
-- **Variable pulse counts**: 3-7 pulses per sequence
+The trainer supports selective loss computation with independent control over each phase:
 
-### PCA Analysis
+| Option | What It Masks | Rationale |
+|--------|---------------|-----------|
+| `ignore_attention_error` | Attention phase | Network learns tempo but we don't care about exact output |
+| `ignore_skipped_sync_error` | First N sync pulses | Matches Merchant Lab exclusion of transition interval |
+| `ignore_tail_error` | After continuation ends | No meaningful prediction expected |
 
-- Fits shared PCA space for all periods within each epoch
-- Captures 3D representations of high-dimensional neural states
-- Enables comparison across different temporal conditions
+- **Attention phase**: Optionally ignored (network learns to wait)
+- **Skipped sync pulses**: Optionally ignored (transition interval, following Merchant Lab)
+- **Sync phase** (after skipped): Always computed (core prediction task)
+- **Continuation phase**: Always computed (tests tempo maintenance)
+- **Tail**: Optionally ignored (after all targets end)
 
-### State Space Interpretation
+### Discrete Period Sampling
 
-The 3D trajectories reveal how the network's internal dynamics evolve:
+Periods are sampled from discrete values (not continuous) to match Merchant Lab methodology:
 
-- Anticipatory ramping before beats
-- Reset dynamics after beat events
-- Period-specific trajectory patterns
-- Learning progression across epochs
+```python
+# With period_step = 0.1
+# Training periods: [0.45, 0.55, 0.65, 0.75, 0.85]
+```
+
+## References
+
+- See [MERCHANT_EXPERIMENT.md](MERCHANT_EXPERIMENT.md) for full citations and methodology details
 
 ## Requirements
 
 - Python 3.8+
 - PyTorch 2.0+
-- Streamlit 1.28+
-- NumPy, Matplotlib, Plotly, scikit-learn
-
-## Citation
-
-If you use this code in your research, please cite:
-
-```
-[Your citation information here]
-```
+- NumPy, Matplotlib, Plotly
+- Streamlit (for visualization)
+- scikit-learn (for PCA)
 
 ## License
 
