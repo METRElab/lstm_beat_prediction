@@ -15,6 +15,8 @@ import sys
 sys.path.append(str(Path(__file__).parent.parent))
 
 from models.lstm_model import BeatPredictionLSTM
+from models.feedback_lstm import FeedbackLSTM
+from models.feedback import FeedbackBuffer, FeedbackPulseGenerator, create_feedback_components
 
 
 class ModelRunner:
@@ -46,13 +48,26 @@ class ModelRunner:
     def setup_model(self) -> None:
         """Initialize model architecture."""
         model_config = self.config['model']
-        self.model_arch = BeatPredictionLSTM(
-            input_size=model_config['input_size'],
-            hidden_size=model_config['hidden_size'],
-            num_layers=model_config['num_layers'],
-            output_size=model_config['output_size'],
-            dropout=model_config.get('dropout', 0.0)
-        )
+        feedback_config = self.config.get('feedback', {})
+        self.feedback_enabled = feedback_config.get('enabled', False)
+
+        if self.feedback_enabled:
+            self.model_arch = FeedbackLSTM(
+                input_size=model_config['input_size'],
+                hidden_size=model_config['hidden_size'],
+                num_layers=model_config['num_layers'],
+                output_size=model_config['output_size'],
+                dropout=model_config.get('dropout', 0.0),
+                feedback_config=feedback_config
+            )
+        else:
+            self.model_arch = BeatPredictionLSTM(
+                input_size=model_config['input_size'],
+                hidden_size=model_config['hidden_size'],
+                num_layers=model_config['num_layers'],
+                output_size=model_config['output_size'],
+                dropout=model_config.get('dropout', 0.0)
+            )
         self.hidden_size = model_config['hidden_size']
         self.num_layers = model_config['num_layers']
 
@@ -90,13 +105,24 @@ class ModelRunner:
         checkpoint = torch.load(checkpoint_path, map_location=self.device)
 
         # Create fresh model and load weights
-        self.model = BeatPredictionLSTM(
-            input_size=self.config['model']['input_size'],
-            hidden_size=self.config['model']['hidden_size'],
-            num_layers=self.config['model']['num_layers'],
-            output_size=self.config['model']['output_size'],
-            dropout=self.config['model'].get('dropout', 0.0)
-        ).to(self.device)
+        feedback_config = self.config.get('feedback', {})
+        if self.feedback_enabled:
+            self.model = FeedbackLSTM(
+                input_size=self.config['model']['input_size'],
+                hidden_size=self.config['model']['hidden_size'],
+                num_layers=self.config['model']['num_layers'],
+                output_size=self.config['model']['output_size'],
+                dropout=self.config['model'].get('dropout', 0.0),
+                feedback_config=feedback_config
+            ).to(self.device)
+        else:
+            self.model = BeatPredictionLSTM(
+                input_size=self.config['model']['input_size'],
+                hidden_size=self.config['model']['hidden_size'],
+                num_layers=self.config['model']['num_layers'],
+                output_size=self.config['model']['output_size'],
+                dropout=self.config['model'].get('dropout', 0.0)
+            ).to(self.device)
 
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.model.eval()
@@ -229,3 +255,91 @@ class ModelRunner:
             Transformed states (timesteps, 3)
         """
         return pca_model.transform(states)
+
+    def run_with_feedback(
+            self,
+            input_tensor: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Run model step-by-step with feedback loop and collect states.
+
+        Args:
+            input_tensor: Input sequence (timesteps,)
+
+        Returns:
+            output: Model output (timesteps,)
+            hidden_states: Hidden states (timesteps, hidden_size)
+            cell_states: Cell states (timesteps, hidden_size)
+            feedback_signal: Feedback signal (timesteps,)
+        """
+        if self.model is None:
+            raise RuntimeError("Model not loaded. Call load_checkpoint first.")
+
+        if not self.feedback_enabled:
+            # Fall back to standard execution, return zero feedback
+            output, hidden_states, cell_states = self.run_with_states(input_tensor)
+            feedback_signal = np.zeros_like(output)
+            return output, hidden_states, cell_states, feedback_signal
+
+        # Get feedback config
+        feedback_config = self.config.get('feedback', {})
+        dt = self.config['task']['dt']
+
+        # Prepare input
+        input_torch = torch.FloatTensor(input_tensor).unsqueeze(0).unsqueeze(-1).to(self.device)
+        batch_size = 1
+        seq_len = input_torch.shape[1]
+
+        # Initialize feedback components
+        buffer, pulse_gen = create_feedback_components(
+            config=feedback_config,
+            dt=dt,
+            batch_size=batch_size,
+            device=self.device
+        )
+
+        # Run step by step with feedback
+        outputs = []
+        hidden_list = []
+        cell_list = []
+        feedback_list = []
+
+        hidden = None
+
+        with torch.no_grad():
+            for t in range(seq_len):
+                # Get external input at timestep t
+                x_t = input_torch[:, t:t + 1, :]  # (1, 1, 1)
+
+                # Get delayed feedback from buffer
+                if t == 0:
+                    delayed_feedback = torch.zeros(batch_size, 1, device=self.device)
+                else:
+                    delayed_feedback = buffer.buffer[0]
+
+                # Combine input with feedback (additive)
+                combined_input = x_t + delayed_feedback.unsqueeze(1)
+
+                # Forward through model (using the base lstm inside FeedbackLSTM)
+                if hasattr(self.model, 'lstm'):
+                    output_t, hidden = self.model.lstm(combined_input, hidden)
+                else:
+                    output_t, hidden = self.model.forward(combined_input, hidden)
+
+                h_t, c_t = hidden
+
+                outputs.append(output_t.squeeze().cpu().numpy())
+                hidden_list.append(h_t.squeeze(0).squeeze(0).cpu().numpy())
+                cell_list.append(c_t.squeeze(0).squeeze(0).cpu().numpy())
+
+                # Check threshold and generate feedback pulse
+                feedback_pulse = pulse_gen.step(output_t.squeeze(1))
+                buffer.push(feedback_pulse)
+                feedback_list.append(feedback_pulse.squeeze().cpu().numpy())
+
+        output = np.array(outputs)
+        hidden_states = np.array(hidden_list)
+        cell_states = np.array(cell_list)
+        feedback_signal = np.array(feedback_list)
+
+        return output, hidden_states, cell_states, feedback_signal

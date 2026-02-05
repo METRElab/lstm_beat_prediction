@@ -60,33 +60,129 @@ python main.py --train --config training_config_sync_continuation.json
 python main.py --test --config experiments/sync_continuation/<timestamp>/config.json --checkpoint checkpoint_epoch_XXXX.pth
 ```
 
-### 3. Visualize Results
+### 3. Analyze and Visualize Results
+
+After training completes, run the analysis pipeline:
 
 ```bash
-streamlit run app.py
+# Step 1: Extract hidden/cell states for all checkpoints
+python analyze_states.py \
+    --experiment_path experiments/sync_continuation/<timestamp> \
+    --analysis_config config/pca_analysis_config.json
+
+# Step 2: Compute PCA models for dimensionality reduction
+python analysis/save_pca_models.py \
+    --experiment_path experiments/sync_continuation/<timestamp> \
+    --analysis_config config/pca_analysis_config.json
+
+# Step 3: Preprocess PCA states for interactive visualization
+python analysis/preprocess_pca.py \
+    --experiment_path experiments/sync_continuation/<timestamp>
 ```
+
+Then choose a visualization method:
+
+#### Interactive Sliders (Matplotlib)
+
+Explore trajectories across epochs and periods with sliders. Shows input, target, output signals and 3D state trajectories with phase shading.
+
+```bash
+# Hidden states
+python analysis/interactive_sliders.py \
+    --experiment_path experiments/sync_continuation/<timestamp> \
+    --plot_type hidden
+
+# Cell states
+python analysis/interactive_sliders.py \
+    --experiment_path experiments/sync_continuation/<timestamp> \
+    --plot_type cell
+
+# MSE progression across epochs
+python analysis/interactive_sliders.py \
+    --experiment_path experiments/sync_continuation/<timestamp> \
+    --plot_type error
+
+# All visualizations
+python analysis/interactive_sliders.py \
+    --experiment_path experiments/sync_continuation/<timestamp> \
+    --plot_type all
+```
+
+#### Sync-Continuation Specific Plots (Matplotlib)
+
+Standalone plots designed for the sync-continuation task with phase boundary visualization.
+
+```bash
+# All plots for latest epoch
+python visualize_sync_continuation.py \
+    --experiment_path experiments/sync_continuation/<timestamp> \
+    --plot all --save
+
+# Input/output with phase shading for a specific epoch and period
+python visualize_sync_continuation.py \
+    --experiment_path experiments/sync_continuation/<timestamp> \
+    --plot output --epoch 5000 --period_idx 0
+
+# 3D trajectories colored by period (all periods overlaid)
+python visualize_sync_continuation.py \
+    --experiment_path experiments/sync_continuation/<timestamp> \
+    --plot trajectories --epoch 5000 --state_type hidden
+
+# Single trajectory colored by phase (attention/sync/continuation)
+python visualize_sync_continuation.py \
+    --experiment_path experiments/sync_continuation/<timestamp> \
+    --plot phases --epoch 5000 --period_idx 0 --state_type hidden
+
+# MSE vs period across multiple epochs
+python visualize_sync_continuation.py \
+    --experiment_path experiments/sync_continuation/<timestamp> \
+    --plot mse
+
+# Training progression (how trajectory evolves over epochs)
+python visualize_sync_continuation.py \
+    --experiment_path experiments/sync_continuation/<timestamp> \
+    --plot progression --period_idx 0 --state_type hidden
+```
+
+#### TensorBoard (Training Curves)
+
+```bash
+tensorboard --logdir experiments/sync_continuation/
+```
+
+Then open `http://localhost:6006` in your browser.
 
 ## Repository Structure
 
 ```
 ├── models/
-│   └── lstm_model.py           # LSTM architecture
+│   └── lstm_model.py                  # LSTM architecture
 ├── data/
-│   └── generators.py           # Sequence generation (sync-continuation task)
+│   └── generators.py                  # Sequence generation (sync-continuation + legacy)
 ├── training/
-│   └── trainer.py              # Training loop with phase-aware loss masking
+│   └── trainer.py                     # Training loop with phase-aware loss masking
 ├── analysis/
-│   ├── save_pca_models.py      # PCA for state space analysis
-│   └── state_analyzer.py       # Hidden state extraction
+│   ├── save_pca_models.py             # PCA model computation for all checkpoints
+│   ├── state_analyzer.py              # Hidden/cell state extraction with phase info
+│   ├── preprocess_pca.py              # PCA preprocessing for interactive visualization
+│   ├── interactive_sliders.py         # Interactive matplotlib plots with epoch/period sliders
+│   └── batch_process_pca.py           # Batch PCA processing utility
 ├── utils/
-│   ├── visualization.py        # Plotting functions
-│   └── viz_utils.py            # 3D trajectory visualization
-├── pages/                      # Streamlit app pages
-├── app.py                      # Main Streamlit application
-├── main.py                     # Training/testing entry point
-├── training_config_sync_continuation.json  # Default config
-├── README.md                   # This file
-└── MERCHANT_EXPERIMENT.md      # Detailed experiment documentation
+│   ├── visualization.py               # Static plotting functions
+│   ├── viz_utils.py                   # 3D trajectory visualization (Plotly)
+│   ├── model_runner.py                # Model loading and inference utility
+│   ├── input_generator.py            # Manual input generation utility
+│   └── logging.py                     # Logging setup
+├── config/
+│   └── pca_analysis_config.json       # Analysis configuration
+├── pages/                             # Streamlit app pages (legacy)
+├── app.py                             # Streamlit application (legacy)
+├── main.py                            # Training/testing entry point
+├── analyze_states.py                  # State analysis entry point
+├── visualize_sync_continuation.py     # Sync-continuation visualization script
+├── training_config_sync_continuation.json  # Default sync-continuation config
+├── README.md                          # This file
+└── MERCHANT_EXPERIMENT.md             # Detailed experiment documentation
 ```
 
 ## Configuration
@@ -134,16 +230,29 @@ This tests generalization to untrained tempos.
 
 ## Visualization Features
 
-### 2D Signal Plots
-- Input/output waveforms with phase boundaries
-- Phase shading (attention=blue, sync=green, continuation=orange)
-- Beat markers and timing annotations
+### Interactive Sliders
+- Epoch and period selection via sliders
+- Input signal display with phase shading
+- Target vs output comparison
+- 3D PCA-reduced hidden/cell state trajectories
+- Phase boundary markers (attention → sync → continuation)
 
-### 3D State Trajectories
-- PCA-reduced hidden state visualization
-- Time-based color gradients
-- Interactive rotation and zoom
-- Beat event markers
+### Sync-Continuation Plots
+- **Output with Phases**: Input, target, and output signals with color-coded phase regions
+- **Trajectories by Period**: All period trajectories overlaid in 3D for comparison
+- **Trajectory by Phase**: Single trajectory colored by phase (attention=blue, skipped=red, sync=green, continuation=orange)
+- **MSE by Period**: Performance across different tempos over training
+- **Training Progression**: How trajectories evolve across epochs
+
+### Phase Color Coding
+
+| Color | Phase | Description |
+|-------|-------|-------------|
+| 🔵 Blue | Attention | Input present, no prediction expected |
+| 🔴 Red | Skipped Sync | First sync pulse, excluded from analysis |
+| 🟢 Green | Synchronization | Input + prediction (core task) |
+| 🟠 Orange | Continuation | No input, prediction only (tempo test) |
+| ⬜ Gray | Tail | After continuation, errors ignored |
 
 ## Technical Details
 
@@ -176,14 +285,61 @@ Periods are sampled from discrete values (not continuous) to match Merchant Lab 
 
 - See [MERCHANT_EXPERIMENT.md](MERCHANT_EXPERIMENT.md) for full citations and methodology details
 
+## Full Workflow
+
+```bash
+# 1. Train model
+python main.py --train --config training_config_sync_continuation.json
+
+# 2. Test model
+python main.py --test \
+    --config experiments/sync_continuation/<timestamp>/config.json \
+    --checkpoint checkpoint_epoch_XXXX.pth
+
+# 3. Extract states
+python analyze_states.py \
+    --experiment_path experiments/sync_continuation/<timestamp> \
+    --analysis_config config/pca_analysis_config.json
+
+# 4. Compute PCA
+python analysis/save_pca_models.py \
+    --experiment_path experiments/sync_continuation/<timestamp> \
+    --analysis_config config/pca_analysis_config.json
+
+# 5. Preprocess for interactive visualization
+python analysis/preprocess_pca.py \
+    --experiment_path experiments/sync_continuation/<timestamp>
+
+# 6. Visualize (choose one)
+python analysis/interactive_sliders.py \
+    --experiment_path experiments/sync_continuation/<timestamp> \
+    --plot_type all
+
+python visualize_sync_continuation.py \
+    --experiment_path experiments/sync_continuation/<timestamp> \
+    --plot all --save
+
+tensorboard --logdir experiments/sync_continuation/
+```
+
 ## Requirements
 
 - Python 3.8+
 - PyTorch 2.0+
 - NumPy, Matplotlib, Plotly
-- Streamlit (for visualization)
 - scikit-learn (for PCA)
+- Streamlit (optional, for legacy visualization)
+
+## References
+
+- See [MERCHANT_EXPERIMENT.md](MERCHANT_EXPERIMENT.md) for full citations and methodology details
 
 ## License
 
 [Your license information]
+
+## Citation
+
+```
+[Your citation information]
+```

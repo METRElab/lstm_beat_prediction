@@ -11,8 +11,8 @@ from typing import Dict, Any
 import numpy as np
 import torch
 
-from models import BeatPredictionLSTM
-from training import Trainer
+from models import BeatPredictionLSTM, FeedbackLSTM
+from training import Trainer, FeedbackTrainer
 from data import generate_test_sequences_from_config
 from utils import setup_logger
 from utils import plot_predictions, plot_accuracy_vs_period, create_test_report, plot_sync_continuation_predictions
@@ -47,23 +47,38 @@ def save_config(config: Dict[str, Any], save_path: str) -> None:
         json.dump(config, f, indent=2)
 
 
-def create_model(config: Dict[str, Any]) -> BeatPredictionLSTM:
+def create_model(config: Dict[str, Any]) -> torch.nn.Module:
     """
     Create LSTM model from config.
+
+    Creates FeedbackLSTM when feedback is enabled, otherwise BeatPredictionLSTM.
 
     Args:
         config: Configuration dictionary
 
     Returns:
-        LSTM model instance
+        LSTM model instance (BeatPredictionLSTM or FeedbackLSTM)
     """
-    model = BeatPredictionLSTM(
-        input_size=config['model']['input_size'],
-        hidden_size=config['model']['hidden_size'],
-        num_layers=config['model']['num_layers'],
-        output_size=config['model']['output_size'],
-        dropout=config['model']['dropout']
-    )
+    feedback_config = config.get('feedback', {})
+    feedback_enabled = feedback_config.get('enabled', False)
+
+    if feedback_enabled:
+        model = FeedbackLSTM(
+            input_size=config['model']['input_size'],
+            hidden_size=config['model']['hidden_size'],
+            num_layers=config['model']['num_layers'],
+            output_size=config['model']['output_size'],
+            dropout=config['model']['dropout'],
+            feedback_config=feedback_config
+        )
+    else:
+        model = BeatPredictionLSTM(
+            input_size=config['model']['input_size'],
+            hidden_size=config['model']['hidden_size'],
+            num_layers=config['model']['num_layers'],
+            output_size=config['model']['output_size'],
+            dropout=config['model']['dropout']
+        )
     return model
 
 
@@ -107,8 +122,13 @@ def train(config_path: str) -> None:
     model = create_model(config)
     logger.info(f"Created model with {sum(p.numel() for p in model.parameters())} parameters")
 
-    # Create trainer
-    trainer = Trainer(config, model, str(experiment_path), logger)
+    # Create trainer (FeedbackTrainer when feedback is enabled)
+    feedback_enabled = config.get('feedback', {}).get('enabled', False)
+    if feedback_enabled:
+        trainer = FeedbackTrainer(config, model, str(experiment_path), logger)
+        logger.info("Using FeedbackTrainer with feedback loop enabled")
+    else:
+        trainer = Trainer(config, model, str(experiment_path), logger)
 
     # Train model
     history = trainer.train()
@@ -189,9 +209,14 @@ def test(config_path: str, checkpoint_name: str = 'best_model.pth') -> None:
         inputs_tensor = torch.FloatTensor(inputs).unsqueeze(-1).to(device)
         targets_tensor = torch.FloatTensor(targets).unsqueeze(-1).to(device)
 
-        # Get predictions
+        # Get predictions (with feedback if enabled)
+        feedback_enabled = config.get('feedback', {}).get('enabled', False)
         with torch.no_grad():
-            predictions, _ = model(inputs_tensor)
+            if feedback_enabled and hasattr(model, 'forward_with_feedback'):
+                dt = config['task']['dt']
+                predictions, _, feedback_signal = model.forward_with_feedback(inputs_tensor, dt)
+            else:
+                predictions, _ = model(inputs_tensor)
 
         # Calculate MSE
         mse = torch.mean((predictions - targets_tensor) ** 2).item()
