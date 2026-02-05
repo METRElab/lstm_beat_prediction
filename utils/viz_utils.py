@@ -5,8 +5,7 @@ Visualization utilities for plotting inputs, outputs, and 3D trajectories.
 import numpy as np
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
-from typing import List, Optional
-
+from typing import List, Optional, Dict, Any
 
 def plot_input_output(
     input_seq: np.ndarray,
@@ -261,6 +260,219 @@ def create_3d_trajectory(
                     showlegend=False,
                     hoverinfo='skip'
                 ))
+
+    # Update layout
+    fig.update_layout(
+        title=title,
+        scene=dict(
+            xaxis_title='PC1',
+            yaxis_title='PC2',
+            zaxis_title='PC3',
+            camera=dict(
+                eye=dict(x=1.5, y=1.5, z=1.5),
+                center=dict(x=0, y=0, z=0),
+                up=dict(x=0, y=0, z=1)
+            ),
+            aspectmode='auto'
+        ),
+        height=700,
+        showlegend=True,
+        legend=dict(
+            yanchor="top",
+            y=0.99,
+            xanchor="left",
+            x=0.01
+        ),
+        hovermode='closest'
+    )
+
+    return fig
+
+
+def create_3d_trajectory_with_phases(
+    states_pca: np.ndarray,
+    phase_info: Optional[Dict[str, Any]] = None,
+    pulse_times: Optional[List[float]] = None,
+    dt: float = 0.001,
+    title: str = "State Trajectory",
+    input_seq: Optional[np.ndarray] = None,
+    output_seq: Optional[np.ndarray] = None
+) -> go.Figure:
+    """
+    Create interactive 3D trajectory plot with phase boundaries for sync-continuation task.
+
+    Args:
+        states_pca: PCA-transformed states (timesteps, 3)
+        phase_info: Dict containing phase boundaries (for sync_continuation)
+        pulse_times: Optional list of pulse onset times
+        dt: Time step in seconds
+        title: Plot title
+        input_seq: Optional input sequence for hover display
+        output_seq: Optional output sequence for hover display
+
+    Returns:
+        Plotly figure object
+    """
+    timesteps = len(states_pca)
+    time_axis = np.arange(timesteps) * dt
+
+    # Prepare hover text
+    hover_texts = []
+    for i in range(timesteps):
+        hover_text = f'Time: {time_axis[i]:.3f}s<br>'
+        hover_text += f'PC1: {states_pca[i, 0]:.3f}<br>'
+        hover_text += f'PC2: {states_pca[i, 1]:.3f}<br>'
+        hover_text += f'PC3: {states_pca[i, 2]:.3f}'
+
+        if input_seq is not None and i < len(input_seq):
+            hover_text += f'<br>Input: {input_seq[i]:.3f}'
+
+        if output_seq is not None and i < len(output_seq):
+            hover_text += f'<br>Output: {output_seq[i]:.3f}'
+
+        # Add phase info
+        if phase_info is not None:
+            att_end = phase_info.get('attention_end_idx', 0)
+            skip_end = phase_info.get('skipped_sync_end_idx', att_end)
+            sync_end = phase_info.get('sync_end_idx', skip_end)
+            cont_end = phase_info.get('continuation_end_idx', timesteps)
+
+            if i < att_end:
+                hover_text += '<br><b>Phase: ATTENTION</b>'
+            elif i < skip_end:
+                hover_text += '<br><b>Phase: SKIPPED SYNC</b>'
+            elif i < sync_end:
+                hover_text += '<br><b>Phase: SYNC</b>'
+            elif i < cont_end:
+                hover_text += '<br><b>Phase: CONTINUATION</b>'
+            else:
+                hover_text += '<br><b>Phase: TAIL</b>'
+
+        hover_texts.append(hover_text)
+
+    # Create color array based on phases
+    if phase_info is not None:
+        att_end = phase_info.get('attention_end_idx', 0)
+        skip_end = phase_info.get('skipped_sync_end_idx', att_end)
+        sync_end = phase_info.get('sync_end_idx', skip_end)
+        cont_end = phase_info.get('continuation_end_idx', timesteps)
+
+        # Color by phase: 0=attention, 1=skipped, 2=sync, 3=continuation, 4=tail
+        colors = np.zeros(timesteps)
+        colors[:att_end] = 0  # Attention - blue
+        colors[att_end:skip_end] = 1  # Skipped - red
+        colors[skip_end:sync_end] = 2  # Sync - green
+        colors[sync_end:cont_end] = 3  # Continuation - orange
+        colors[cont_end:] = 4  # Tail - gray
+
+        colorscale = [
+            [0.0, 'rgb(66, 133, 244)'],   # Blue - Attention
+            [0.25, 'rgb(234, 67, 53)'],   # Red - Skipped
+            [0.5, 'rgb(52, 168, 83)'],    # Green - Sync
+            [0.75, 'rgb(251, 188, 5)'],   # Orange - Continuation
+            [1.0, 'rgb(150, 150, 150)']   # Gray - Tail
+        ]
+    else:
+        colors = time_axis
+        colorscale = 'Viridis'
+
+    # Create main trajectory trace
+    trajectory_trace = go.Scatter3d(
+        x=states_pca[:, 0],
+        y=states_pca[:, 1],
+        z=states_pca[:, 2],
+        mode='lines+markers',
+        line=dict(
+            color=colors,
+            colorscale=colorscale,
+            width=3,
+        ),
+        marker=dict(
+            size=2,
+            color=colors,
+            colorscale=colorscale,
+            showscale=False
+        ),
+        name='Trajectory',
+        hovertemplate='%{text}',
+        text=hover_texts
+    )
+
+    fig = go.Figure(data=[trajectory_trace])
+
+    # Add start point
+    fig.add_trace(go.Scatter3d(
+        x=[states_pca[0, 0]],
+        y=[states_pca[0, 1]],
+        z=[states_pca[0, 2]],
+        mode='markers',
+        marker=dict(size=10, color='green', symbol='circle'),
+        name='Start',
+        showlegend=True
+    ))
+
+    # Add end point
+    fig.add_trace(go.Scatter3d(
+        x=[states_pca[-1, 0]],
+        y=[states_pca[-1, 1]],
+        z=[states_pca[-1, 2]],
+        mode='markers',
+        marker=dict(size=10, color='red', symbol='square'),
+        name='End',
+        showlegend=True
+    ))
+
+    # Add phase boundary markers if available
+    if phase_info is not None:
+        boundaries = [
+            ('attention_end_idx', 'Att→Skip', 'blue'),
+            ('skipped_sync_end_idx', 'Skip→Sync', 'red'),
+            ('sync_end_idx', 'Sync→Cont', 'green'),
+            ('continuation_end_idx', 'Cont→Tail', 'orange'),
+        ]
+
+        for key, label, color in boundaries:
+            idx = phase_info.get(key, 0)
+            if 0 < idx < timesteps:
+                fig.add_trace(go.Scatter3d(
+                    x=[states_pca[idx, 0]],
+                    y=[states_pca[idx, 1]],
+                    z=[states_pca[idx, 2]],
+                    mode='markers',
+                    marker=dict(size=8, color=color, symbol='diamond'),
+                    name=label,
+                    showlegend=True
+                ))
+
+    # Add beat markers if provided
+    if pulse_times is not None:
+        beat_points = []
+        beat_hovers = []
+
+        for i, pulse_time in enumerate(pulse_times):
+            pulse_idx = int(pulse_time / dt)
+            if 0 <= pulse_idx < len(states_pca):
+                beat_points.append(states_pca[pulse_idx])
+                beat_hovers.append(f'BEAT {i+1}<br>Time: {pulse_time:.3f}s')
+
+        if beat_points:
+            beat_points = np.array(beat_points)
+            fig.add_trace(go.Scatter3d(
+                x=beat_points[:, 0],
+                y=beat_points[:, 1],
+                z=beat_points[:, 2],
+                mode='markers',
+                marker=dict(
+                    size=12,
+                    color='red',
+                    symbol='diamond',
+                    line=dict(color='darkred', width=2)
+                ),
+                name=f'Beats (n={len(beat_points)})',
+                showlegend=True,
+                hovertemplate='%{text}',
+                text=beat_hovers
+            ))
 
     # Update layout
     fig.update_layout(

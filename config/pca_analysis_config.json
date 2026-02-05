@@ -1,8 +1,8 @@
 {
   "analysis": {
-    "trials_per_tempo": 10,
-    "n_test_periods": 1,
-    "save_transformed_data": false,
-    "n_components": 3
+    "n_test_periods": 9,
+    "trials_per_tempo": 1,
+    "n_components": 3,
+    "min_iti": 2.0
   }
 }

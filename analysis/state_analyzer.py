@@ -2,7 +2,7 @@
 State analyzer for post-training analysis of LSTM hidden and cell states.
 """
 
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 import json
 import logging
 from pathlib import Path
@@ -42,9 +42,14 @@ class StateAnalyzer:
         with open(config_path, 'r') as f:
             self.experiment_config = json.load(f)
 
-        # Override ITI settings for analysis
-        self.min_iti = analysis_config['analysis']['min_iti']
-        self.mean_iti = self.min_iti  # Set equal for consistent padding
+        # Check task type
+        self.task_type = self.experiment_config['task'].get('task_type', 'legacy')
+        self.logger.info(f"Task type: {self.task_type}")
+
+        # Override ITI settings for analysis (only for legacy tasks)
+        if self.task_type != 'sync_continuation':
+            self.min_iti = analysis_config['analysis'].get('min_iti', 2.0)
+            self.mean_iti = self.min_iti
 
         # Setup device
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -65,13 +70,11 @@ class StateAnalyzer:
         checkpoint_files = []
 
         for file in checkpoint_dir.glob('checkpoint_epoch_*.pth'):
-            # Extract epoch number from filename
             match = re.search(r'checkpoint_epoch_(\d+)\.pth', file.name)
             if match:
                 epoch = int(match.group(1))
                 checkpoint_files.append((epoch, file))
 
-        # Sort by epoch
         checkpoint_files.sort(key=lambda x: x[0])
 
         self.logger.info(f"Found {len(checkpoint_files)} checkpoints")
@@ -122,35 +125,25 @@ class StateAnalyzer:
         Returns:
             outputs: Model predictions (1, timesteps, 1)
             all_h_t: List of hidden states at each timestep
-                    Each element shape: (num_layers, hidden_size)
             all_c_t: List of cell states at each timestep
-                    Each element shape: (num_layers, hidden_size)
         """
         sequence_length = input_sequence.shape[1]
         outputs = []
         all_h_t = []
         all_c_t = []
 
-        # Initialize with None - will be initialized in forward function
         hidden = None
 
-        # Process sequence step by step
         for t in range(sequence_length):
-            # Get input at time t (shape: 1, 1, 1)
             x_t = input_sequence[:, t:t+1, :]
-
-            # Forward through model
             output_t, hidden = model.forward(x_t, hidden)
 
-            # Extract h_t and c_t from hidden tuple
             h_t, c_t = hidden
 
-            # Store outputs and states
             outputs.append(output_t)
-            all_h_t.append(h_t.squeeze(1).cpu().numpy())  # Remove batch dim
-            all_c_t.append(c_t.squeeze(1).cpu().numpy())  # Remove batch dim
+            all_h_t.append(h_t.squeeze(1).cpu().numpy())
+            all_c_t.append(c_t.squeeze(1).cpu().numpy())
 
-        # Concatenate outputs
         outputs = torch.cat(outputs, dim=1)
 
         return outputs, all_h_t, all_c_t
@@ -158,35 +151,14 @@ class StateAnalyzer:
     def analyze_all_checkpoints(self) -> None:
         """
         Analyze all checkpoints and save results.
-
-        Saved data format in .npz files:
-        - hidden_states: Array of shape (n_periods, timesteps, num_layers, hidden_size)
-                        Hidden states for each period, timestep, and layer
-        - cell_states: Array of shape (n_periods, timesteps, num_layers, hidden_size)
-                      Cell states for each period, timestep, and layer
-        - network_outputs: Array of shape (n_periods, timesteps)
-                          Network output predictions for each period and timestep
-        - periods: Array of shape (n_periods,)
-                  The period value (in seconds) for each sequence
-        - mse_per_period: Array of shape (n_periods,)
-                         MSE loss for each period
-        - epoch: Scalar, the epoch number of this checkpoint
-
-        The first dimension corresponds to different test periods, allowing
-        analysis of how states and outputs differ across different beat frequencies.
         """
-        # Get all checkpoints
         checkpoint_files = self.get_checkpoint_files()
         if not checkpoint_files:
             self.logger.error("No checkpoints found")
             return
 
-        # Create model
         model = self.create_model()
         model.to(self.device)
-
-        # Generate test periods
-        test_periods = self.generate_test_periods()
 
         # Prepare config for test data generation
         test_config = self.experiment_config.copy()
@@ -194,16 +166,20 @@ class StateAnalyzer:
         # Override with analysis settings
         test_config['testing'] = {
             'n_test_periods': self.analysis_config['analysis']['n_test_periods'],
-            'test_trials_per_period': self.analysis_config['analysis']['trials_per_period']
+            'test_trials_per_period': self.analysis_config['analysis'].get('trials_per_period', 1)
         }
 
-        # Override ITI to be fixed (mean_iti = min_iti)
-        test_config['task']['min_iti'] = self.min_iti
-        test_config['task']['mean_iti'] = self.min_iti
+        # For legacy tasks, override ITI
+        if self.task_type != 'sync_continuation':
+            test_config['task']['min_iti'] = self.min_iti
+            test_config['task']['mean_iti'] = self.min_iti
 
-        # Generate test sequences using the config-based generator
+        # Generate test sequences
         self.logger.info("Generating test sequences...")
         test_data = generate_test_sequences_from_config(test_config)
+
+        # Check if this is sync_continuation task
+        is_sync_continuation = self.task_type == 'sync_continuation'
 
         # Store accuracy progression
         accuracy_progression = {}
@@ -218,19 +194,31 @@ class StateAnalyzer:
             model.eval()
 
             # Store states and MSE for this checkpoint
-            hidden_states = []  # Will store states for each period
-            cell_states = []    # Will store states for each period
-            network_outputs = []  # Will store network outputs for each period
+            hidden_states = []
+            cell_states = []
+            network_outputs = []
+            network_inputs = []  # ADD THIS
+            target_outputs = []  # ADD THIS
             mse_per_period = []
+            all_phase_infos = []
 
             # Test each period
             for i, period_data in enumerate(test_data['sequences']):
                 period = period_data['period']
-                # Get first trial (since trials_per_period = 1)
-                input_seq = period_data['inputs'][0]  # Shape: (timesteps,)
-                target_seq = period_data['targets'][0]  # Shape: (timesteps,)
+                input_seq = period_data['inputs'][0]
+                target_seq = period_data['targets'][0]
 
-                # Convert to tensors (batch_size=1)
+                # Store input and target
+                network_inputs.append(input_seq)  # ADD THIS
+                target_outputs.append(target_seq)  # ADD THIS
+
+                # Get phase info if available (sync_continuation task)
+                phase_info = None
+                if is_sync_continuation and 'phase_infos' in period_data:
+                    phase_info = period_data['phase_infos'][0]
+                    all_phase_infos.append(phase_info)
+
+                # Convert to tensors
                 input_tensor = torch.FloatTensor(input_seq).unsqueeze(0).unsqueeze(-1).to(self.device)
                 target_tensor = torch.FloatTensor(target_seq).unsqueeze(0).unsqueeze(-1).to(self.device)
 
@@ -238,55 +226,69 @@ class StateAnalyzer:
                 with torch.no_grad():
                     outputs, h_t_list, c_t_list = self.run_sequence_step_by_step(model, input_tensor)
 
-                # Calculate MSE
-                mse = torch.mean((outputs - target_tensor) ** 2).item()
+                # Calculate MSE (respecting phase masking for sync_continuation)
+                if is_sync_continuation and phase_info is not None:
+                    attention_end = phase_info.get('attention_end_idx', 0)
+                    skipped_sync_end = phase_info.get('skipped_sync_end_idx', attention_end)
+                    continuation_end = phase_info.get('continuation_end_idx', outputs.shape[1])
+
+                    mask = torch.zeros_like(outputs, dtype=torch.bool)
+                    mask[:, skipped_sync_end:continuation_end, :] = True
+
+                    if mask.sum() > 0:
+                        mse = torch.mean((outputs[mask] - target_tensor[mask]) ** 2).item()
+                    else:
+                        mse = torch.mean((outputs - target_tensor) ** 2).item()
+                else:
+                    mse = torch.mean((outputs - target_tensor) ** 2).item()
+
                 mse_per_period.append(mse)
 
-                # Stack states across time
-                # h_t_list is a list of timesteps, each element has shape (num_layers, hidden_size)
-                # After stacking: (timesteps, num_layers, hidden_size)
+                # Stack states
                 h_states = np.stack(h_t_list, axis=0)
                 c_states = np.stack(c_t_list, axis=0)
 
-                # Save network output (squeeze to remove batch and feature dims)
-                output_array = outputs.squeeze().cpu().numpy()  # Shape: (timesteps,)
+                output_array = outputs.squeeze().cpu().numpy()
 
                 hidden_states.append(h_states)
                 cell_states.append(c_states)
                 network_outputs.append(output_array)
 
-            # Convert lists to arrays
-            # Shape: (n_periods, timesteps, num_layers, hidden_size)
+            # Convert to arrays
             hidden_states = np.array(hidden_states)
             cell_states = np.array(cell_states)
-            # Shape: (n_periods, timesteps)
             network_outputs = np.array(network_outputs)
+            network_inputs = np.array(network_inputs)  # ADD THIS
+            target_outputs = np.array(target_outputs)  # ADD THIS
 
-            # Save states for this checkpoint with detailed data
-            # Each saved file contains:
-            # - States for all test periods
-            # - Network outputs for all test periods
-            # - The period value for each test sequence
-            # - MSE performance for each period
+            # Prepare save data
+            save_data = {
+                'hidden_states': hidden_states,
+                'cell_states': cell_states,
+                'network_outputs': network_outputs,
+                'network_inputs': network_inputs,  # ADD THIS
+                'target_outputs': target_outputs,  # ADD THIS
+                'periods': test_data['periods'],
+                'mse_per_period': mse_per_period,
+                'epoch': epoch,
+                'task_type': self.task_type
+            }
+
+            # Add phase infos for sync_continuation
+            if is_sync_continuation and all_phase_infos:
+                save_data['phase_infos'] = self._serialize_phase_infos(all_phase_infos)
+
+            # Save states
             save_path = self.output_dir / f'epoch_{epoch}_states.npz'
-            np.savez(
-                save_path,
-                hidden_states=hidden_states,  # Shape: (n_periods, timesteps, num_layers, hidden_size)
-                cell_states=cell_states,      # Shape: (n_periods, timesteps, num_layers, hidden_size)
-                network_outputs=network_outputs,  # Shape: (n_periods, timesteps)
-                periods=test_data['periods'],  # Shape: (n_periods,) - period values in seconds
-                mse_per_period=mse_per_period, # Shape: (n_periods,) - MSE for each period
-                epoch=epoch                    # Scalar - epoch number
-            )
-            self.logger.info(f"Saved states and outputs to {save_path}")
+            np.savez(save_path, **save_data)
+            self.logger.info(f"Saved states to {save_path}")
 
-            # Store accuracy progression with periods
+            # Store accuracy progression
             accuracy_progression[str(epoch)] = {
                 'periods': test_data['periods'],
                 'mse_per_period': mse_per_period
             }
 
-            # Log MSE info
             mean_mse = np.mean(mse_per_period)
             self.logger.info(f"Epoch {epoch}: Mean MSE = {mean_mse:.6f}")
 
@@ -294,7 +296,6 @@ class StateAnalyzer:
         accuracy_path = self.output_dir / 'accuracy_progression.json'
         with open(accuracy_path, 'w') as f:
             json.dump(accuracy_progression, f, indent=2)
-        self.logger.info(f"Saved accuracy progression to {accuracy_path}")
 
         # Save analysis metadata
         metadata = {
@@ -303,7 +304,7 @@ class StateAnalyzer:
             'epochs_analyzed': [epoch for epoch, _ in checkpoint_files],
             'test_periods': test_data['periods'],
             'analysis_config': self.analysis_config,
-            'target_type': test_config['task'].get('target_type', 'rectangle')
+            'task_type': self.task_type
         }
 
         metadata_path = self.output_dir / 'analysis_metadata.json'
@@ -311,3 +312,35 @@ class StateAnalyzer:
             json.dump(metadata, f, indent=2)
 
         self.logger.info(f"Analysis complete. Results saved to {self.output_dir}")
+
+    def _serialize_phase_infos(self, phase_infos: List[Dict]) -> Dict[str, np.ndarray]:
+        """
+        Serialize phase_infos list to arrays for numpy saving.
+
+        Args:
+            phase_infos: List of phase info dicts
+
+        Returns:
+            Dictionary of arrays
+        """
+        if not phase_infos:
+            return {}
+
+        # Extract common keys
+        keys_to_save = [
+            'n_attention', 'n_sync', 'n_continuation',
+            'attention_end_idx', 'sync_end_idx', 'continuation_end_idx',
+            'skipped_sync_end_idx', 'period'
+        ]
+
+        result = {}
+        for key in keys_to_save:
+            values = []
+            for pi in phase_infos:
+                if key in pi:
+                    values.append(pi[key])
+                else:
+                    values.append(0)  # Default value
+            result[f'phase_{key}'] = np.array(values)
+
+        return result

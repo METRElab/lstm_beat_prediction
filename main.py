@@ -15,7 +15,7 @@ from models import BeatPredictionLSTM
 from training import Trainer
 from data import generate_test_sequences_from_config
 from utils import setup_logger
-from utils import plot_predictions, plot_accuracy_vs_period, create_test_report
+from utils import plot_predictions, plot_accuracy_vs_period, create_test_report, plot_sync_continuation_predictions
 
 
 def load_config(config_path: str) -> Dict[str, Any]:
@@ -200,16 +200,30 @@ def test(config_path: str, checkpoint_name: str = 'best_model.pth') -> None:
 
         # Plot first trial for each period
         pred_numpy = predictions[0, :, 0].cpu().numpy()
-        plot_predictions(
-            input_sequence=inputs[0],
-            target_sequence=targets[0],
-            predicted_sequence=pred_numpy,
-            period=period,
-            dt=config['task']['dt'],
-            save_path=str(figures_dir / f'test_period_{period:.2f}_{i}.png'),
-            show=False
-        )
 
+        # Check if sync_continuation task
+        task_type = config["task"].get("task_type", "legacy")
+        if task_type == "sync_continuation" and "phase_infos" in period_data:
+            plot_sync_continuation_predictions(
+                input_sequence=inputs[0],
+                target_sequence=targets[0],
+                predicted_sequence=pred_numpy,
+                phase_info=period_data["phase_infos"][0],
+                period=period,
+                dt=config['task']['dt'],
+                save_path=str(figures_dir / f'test_period_{period:.2f}_{i}.png'),
+                show=False
+            )
+        else:
+            plot_predictions(
+                input_sequence=inputs[0],
+                target_sequence=targets[0],
+                predicted_sequence=pred_numpy,
+                period=period,
+                dt=config['task']['dt'],
+                save_path=str(figures_dir / f'test_period_{period:.2f}_{i}.png'),
+                show=False
+            )
         logger.info(f"Period {period:.3f}s: MSE = {mse:.6f}")
 
     # Calculate overall statistics

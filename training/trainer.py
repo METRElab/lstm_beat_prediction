@@ -108,7 +108,9 @@ class Trainer:
 
         for _ in range(n_batches_total):
             # Generate batch
-            inputs, targets, _, last_inputs_idx = create_batch_from_config(self.config)
+            batch_result = create_batch_from_config(self.config)
+            inputs, targets, periods, end_indices, phase_infos = batch_result
+
             inputs = inputs.to(self.device)
             targets = targets.to(self.device)
 
@@ -118,9 +120,39 @@ class Trainer:
             # Forward pass
             outputs, _ = self.model(inputs)
 
-            if self.config.get("task", {}).get("ignore_tail_error", False):
-                for last_pulse_idx, target_seq, input_seq in zip(last_inputs_idx, targets, inputs):
-                    input_seq[last_pulse_idx:, 0] = target_seq[last_pulse_idx:, 0]
+            # Get masking options from config
+            task_config = self.config.get("task", {})
+            ignore_attention = task_config.get("ignore_attention_error", False)
+            ignore_skipped_sync = task_config.get("ignore_skipped_sync_error", False)
+            ignore_tail = task_config.get("ignore_tail_error", False)
+            task_type = task_config.get("task_type", "legacy")
+
+            # Apply masking for sync_continuation task
+            if task_type == "sync_continuation" and phase_infos is not None:
+                for i, phase_info in enumerate(phase_infos):
+                    # Mask attention phase
+                    if ignore_attention:
+                        attention_end_idx = phase_info.get("attention_end_idx", 0)
+                        if attention_end_idx > 0:
+                            outputs[i, :attention_end_idx, :] = targets[i, :attention_end_idx, :].detach()
+
+                    # Mask skipped sync pulses
+                    if ignore_skipped_sync:
+                        attention_end_idx = phase_info.get("attention_end_idx", 0)
+                        skipped_sync_end_idx = phase_info.get("skipped_sync_end_idx", attention_end_idx)
+                        if skipped_sync_end_idx > attention_end_idx:
+                            outputs[i, attention_end_idx:skipped_sync_end_idx, :] = targets[
+                                i, attention_end_idx:skipped_sync_end_idx, :].detach()
+
+                    # Mask tail after continuation
+                    if ignore_tail:
+                        continuation_end_idx = phase_info.get("continuation_end_idx", outputs.shape[1])
+                        outputs[i, continuation_end_idx:, :] = targets[i, continuation_end_idx:, :].detach()
+
+            # Legacy behavior for non-sync_continuation tasks
+            elif ignore_tail and end_indices is not None:
+                for i, end_idx in enumerate(end_indices):
+                    outputs[i, end_idx:, :] = targets[i, end_idx:, :].detach()
 
             # Calculate loss
             loss = self.criterion(outputs, targets)
@@ -156,16 +188,48 @@ class Trainer:
         with torch.no_grad():
             for _ in range(n_batches_total):
                 # Generate validation batch
-                inputs, targets, _, last_inputs_idx = create_batch_from_config(self.config)
+                batch_result = create_batch_from_config(self.config)
+                inputs, targets, periods, end_indices, phase_infos = batch_result
+
                 inputs = inputs.to(self.device)
                 targets = targets.to(self.device)
 
                 # Forward pass
                 outputs, _ = self.model(inputs)
 
-                if self.config.get("task", {}).get("ignore_tail_error", False):
-                    for last_pulse_idx, target_seq, input_seq in zip(last_inputs_idx, targets, inputs):
-                        input_seq[last_pulse_idx:, 0] = target_seq[last_pulse_idx:, 0]
+                # Get masking options from config
+                task_config = self.config.get("task", {})
+                ignore_attention = task_config.get("ignore_attention_error", False)
+                ignore_skipped_sync = task_config.get("ignore_skipped_sync_error", False)
+                ignore_tail = task_config.get("ignore_tail_error", False)
+                task_type = task_config.get("task_type", "legacy")
+
+                # Apply masking for sync_continuation task
+                if task_type == "sync_continuation" and phase_infos is not None:
+                    for i, phase_info in enumerate(phase_infos):
+                        # Mask attention phase
+                        if ignore_attention:
+                            attention_end_idx = phase_info.get("attention_end_idx", 0)
+                            if attention_end_idx > 0:
+                                outputs[i, :attention_end_idx, :] = targets[i, :attention_end_idx, :].detach()
+
+                        # Mask skipped sync pulses
+                        if ignore_skipped_sync:
+                            attention_end_idx = phase_info.get("attention_end_idx", 0)
+                            skipped_sync_end_idx = phase_info.get("skipped_sync_end_idx", attention_end_idx)
+                            if skipped_sync_end_idx > attention_end_idx:
+                                outputs[i, attention_end_idx:skipped_sync_end_idx, :] = targets[
+                                    i, attention_end_idx:skipped_sync_end_idx, :].detach()
+
+                        # Mask tail after continuation
+                        if ignore_tail:
+                            continuation_end_idx = phase_info.get("continuation_end_idx", outputs.shape[1])
+                            outputs[i, continuation_end_idx:, :] = targets[i, continuation_end_idx:, :].detach()
+
+                # Legacy behavior for non-sync_continuation tasks
+                elif ignore_tail and end_indices is not None:
+                    for i, end_idx in enumerate(end_indices):
+                        outputs[i, end_idx:, :] = targets[i, end_idx:, :].detach()
 
                 # Calculate loss
                 loss = self.criterion(outputs, targets)

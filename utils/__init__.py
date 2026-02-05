@@ -8,12 +8,14 @@ from .logging import setup_logger
 from .visualization import (
     plot_predictions,
     plot_accuracy_vs_period,
-    create_test_report
+    create_test_report,
+    plot_sync_continuation_predictions,
 )
 
 __all__ = [
     'setup_logger',
     'plot_predictions',
     'plot_accuracy_vs_period',
-    'create_test_report'
+    'create_test_report',
+    'plot_sync_continuation_predictions',
 ]

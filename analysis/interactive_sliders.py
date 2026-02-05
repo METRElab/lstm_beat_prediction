@@ -103,6 +103,290 @@ class ErrorProgressionSliderPlot:
         plt.show()
 
 
+# class DualSlider3DPlot:
+#     """
+#     Interactive 3D plot with epoch and period sliders for state trajectories.
+#     """
+#
+#     def __init__(self, pca_dir: Path, state_type: str = 'hidden'):
+#         """
+#         Initialize dual slider 3D plot.
+#
+#         Args:
+#             pca_dir: Path to pca_preprocessed directory
+#             state_type: 'hidden' or 'cell'
+#         """
+#         self.pca_dir = pca_dir
+#         self.state_type = state_type
+#         self.state_key = 'h_t_pca' if state_type == 'hidden' else 'c_t_pca'
+#         self.var_key = 'h_t_explained_variance' if state_type == 'hidden' else 'c_t_explained_variance'
+#
+#         # Load data
+#         self.load_data()
+#
+#         # Load experiment config to get task parameters
+#         self.load_experiment_config()
+#
+#         # Load original state files with outputs
+#         self.load_outputs()
+#
+#         self.load_phase_infos()  # ADD THIS LINE
+#
+#         # Setup figure
+#         self.setup_plot()
+#
+#     def load_phase_infos(self):
+#         """Load phase infos from state files if available."""
+#         self.phase_infos = {}
+#         state_analysis_dir = self.pca_dir.parent
+#
+#         for epoch in self.epochs:
+#             state_file = state_analysis_dir / f'epoch_{epoch}_states.npz'
+#             if state_file.exists():
+#                 data = np.load(state_file, allow_pickle=True)
+#
+#                 # Check for phase info arrays
+#                 phase_keys = [k for k in data.files if k.startswith('phase_')]
+#
+#                 # Skip if no phase info or if it's a legacy experiment
+#                 if not phase_keys:
+#                     continue
+#
+#                 # Check if this is actually array data (not scalar)
+#                 first_key = phase_keys[0]
+#                 try:
+#                     test_array = data[first_key]
+#                     # Check if it's actually an array with multiple elements
+#                     if test_array.ndim == 0 or len(test_array) == 0:
+#                         continue
+#                 except (IndexError, TypeError):
+#                     continue
+#
+#                 self.phase_infos[epoch] = {}
+#                 n_periods = len(self.periods)
+#
+#                 for period_idx in range(n_periods):
+#                     phase_info = {}
+#                     for key in phase_keys:
+#                         clean_key = key.replace('phase_', '')
+#                         try:
+#                             arr = data[key]
+#                             if arr.ndim > 0 and period_idx < len(arr):
+#                                 phase_info[clean_key] = int(arr[period_idx])
+#                             else:
+#                                 phase_info[clean_key] = 0
+#                         except (IndexError, TypeError):
+#                             phase_info[clean_key] = 0
+#
+#                     self.phase_infos[epoch][period_idx] = phase_info
+#
+#     def load_experiment_config(self):
+#         """Load experiment configuration for task parameters."""
+#         # Go up from pca_preprocessed to find config
+#         experiment_path = self.pca_dir.parent.parent
+#         config_path = experiment_path / 'config.json'
+#
+#         if config_path.exists():
+#             with open(config_path, 'r') as f:
+#                 self.config = json.load(f)
+#         else:
+#             print(f"Warning: Config file not found at {config_path}")
+#             self.config = None
+#
+#     def load_outputs(self):
+#         """Load network outputs from original state files."""
+#         self.outputs = {}
+#         state_analysis_dir = self.pca_dir.parent
+#
+#         for epoch in self.epochs:
+#             state_file = state_analysis_dir / f'epoch_{epoch}_states.npz'
+#             if state_file.exists():
+#                 data = np.load(state_file)
+#                 if 'network_outputs' in data:
+#                     self.outputs[epoch] = data['network_outputs']  # (n_periods, timesteps)
+#                 else:
+#                     print(f"Warning: No outputs found in {state_file}")
+#                     self.outputs[epoch] = None
+#             else:
+#                 self.outputs[epoch] = None
+#
+#     def calculate_beat_timesteps(self, period: float) -> list:
+#         """
+#         Calculate timestep indices where beats occur.
+#
+#         Args:
+#             period: Beat period in seconds
+#
+#         Returns:
+#             List of timestep indices for beat onsets
+#         """
+#         if self.config is None:
+#             return []
+#
+#         task = self.config['task']
+#         n_pulses = task['n_pulses']
+#         dt = task['dt']
+#         # Use fixed ITI from analysis config (min_iti = mean_iti)
+#         iti = 2
+#
+#         beat_timesteps = []
+#         for i in range(n_pulses):
+#             beat_time = iti/2 + i * period
+#             beat_timestep = int(beat_time / dt)
+#             beat_timesteps.append(beat_timestep)
+#
+#         return beat_timesteps
+#
+#     def load_data(self):
+#         """Load all PCA preprocessed data."""
+#         pca_files = sorted(self.pca_dir.glob('epoch_*_pca_states.npz'))
+#
+#         self.data = {}
+#         self.epochs = []
+#
+#         for file in pca_files:
+#             data = np.load(file)
+#             epoch = data['epoch'].item()
+#             self.epochs.append(epoch)
+#
+#             self.data[epoch] = {
+#                 'states': data[self.state_key],
+#                 'periods': data['periods'],
+#                 'mse': data['mse_per_period'],
+#                 'explained_variance': data[self.var_key]
+#             }
+#
+#         self.epochs.sort()
+#         self.periods = self.data[self.epochs[0]]['periods']
+#         self.n_epochs = len(self.epochs)
+#         self.n_periods = len(self.periods)
+#
+#     def setup_plot(self):
+#         """Setup the matplotlib figure with output subplot and 3D axis with sliders."""
+#         self.fig = plt.figure(figsize=(12, 12))
+#
+#         # Create output axis at the top
+#         self.ax_output = self.fig.add_axes([0.1, 0.85, 0.8, 0.08])
+#
+#         # Create 3D axis below
+#         self.ax = self.fig.add_axes([0.1, 0.18, 0.8, 0.65], projection='3d')
+#
+#         # Create sliders at the bottom
+#         ax_epoch = plt.axes([0.15, 0.10, 0.7, 0.03])
+#         ax_period = plt.axes([0.15, 0.05, 0.7, 0.03])
+#
+#         self.epoch_slider = Slider(
+#             ax_epoch, 'Epoch',
+#             0, self.n_epochs - 1,
+#             valinit=0, valstep=1,
+#             valfmt='%d'
+#         )
+#
+#         self.period_slider = Slider(
+#             ax_period, 'Period',
+#             0, self.n_periods - 1,
+#             valinit=0, valstep=1,
+#             valfmt='%d'
+#         )
+#
+#         # Connect sliders to update function
+#         self.epoch_slider.on_changed(self.update_plot)
+#         self.period_slider.on_changed(self.update_plot)
+#
+#         # Initialize plot
+#         self.trajectory_line = None
+#         self.start_point = None
+#         self.end_point = None
+#         self.scatter = None
+#
+#         # Initial plot
+#         self.update_plot(None)
+#
+#     def update_plot(self, val):
+#         """Update both output and 3D plots based on slider values."""
+#         self.ax.clear()
+#         self.ax_output.clear()
+#
+#         epoch_idx = int(self.epoch_slider.val)
+#         period_idx = int(self.period_slider.val)
+#
+#         epoch = self.epochs[epoch_idx]
+#         period = self.periods[period_idx]
+#         data = self.data[epoch]
+#
+#         trajectory = data['states'][period_idx]
+#         mse = data['mse'][period_idx]
+#         explained_var = data['explained_variance'][period_idx]
+#
+#         # Get phase info if available
+#         phase_info = None
+#         if hasattr(self, 'phase_infos') and self.phase_infos:
+#             if epoch in self.phase_infos:
+#                 phase_info = self.phase_infos[epoch].get(period_idx, None)
+#
+#         # Calculate beat timesteps
+#         beat_timesteps = self.calculate_beat_timesteps(period)
+#
+#         # Plot output if available
+#         if epoch in self.outputs and self.outputs[epoch] is not None:
+#             output = self.outputs[epoch][period_idx]
+#             timesteps_count = len(output)
+#
+#             if self.config:
+#                 dt = self.config['task']['dt']
+#                 time_axis = np.arange(timesteps_count) * dt
+#                 self.ax_output.plot(time_axis, output, 'b-', linewidth=1.5, label='Network Output')
+#                 self.ax_output.set_xlabel('Time (s)')
+#             else:
+#                 time_axis = np.arange(timesteps_count)
+#                 self.ax_output.plot(output, 'b-', linewidth=1.5, label='Network Output')
+#                 self.ax_output.set_xlabel('Timesteps')
+#
+#             # Add phase shading if available
+#             if phase_info is not None and self.config:
+#                 dt = self.config['task']['dt']
+#                 att_end = phase_info.get('attention_end_idx', 0) * dt
+#                 skip_end = phase_info.get('skipped_sync_end_idx', att_end) * dt
+#                 sync_end = phase_info.get('sync_end_idx', skip_end) * dt
+#                 cont_end = phase_info.get('continuation_end_idx', timesteps_count) * dt
+#                 max_time = time_axis[-1]
+#
+#                 # Add phase shading
+#                 if att_end > 0:
+#                     self.ax_output.axvspan(0, att_end, color='blue', alpha=0.1, label='Attention')
+#                 if skip_end > att_end:
+#                     self.ax_output.axvspan(att_end, skip_end, color='red', alpha=0.1, label='Skipped')
+#                 if sync_end > skip_end:
+#                     self.ax_output.axvspan(skip_end, sync_end, color='green', alpha=0.1, label='Sync')
+#                 if cont_end > sync_end:
+#                     self.ax_output.axvspan(sync_end, cont_end, color='orange', alpha=0.1, label='Continuation')
+#                 if cont_end < max_time:
+#                     self.ax_output.axvspan(cont_end, max_time, color='gray', alpha=0.1, label='Tail')
+#
+#             # Add beat markers
+#             if beat_timesteps:
+#                 valid_beats = [t for t in beat_timesteps if t < len(output)]
+#                 if valid_beats:
+#                     if self.config:
+#                         beat_times = [t * dt for t in valid_beats]
+#                         beat_values = output[valid_beats]
+#                         self.ax_output.scatter(
+#                             beat_times, beat_values,
+#                             c='red', s=100, marker='*',
+#                             edgecolors='darkred', linewidths=2,
+#                             label=f'Beats (n={len(valid_beats)})', zorder=5
+#                         )
+#
+#             self.ax_output.set_ylabel('Output Value')
+#             self.ax_output.set_title(f'Network Output - Epoch {epoch}, Period {period:.3f}s, MSE: {mse:.6f}')
+#             self.ax_output.grid(True, alpha=0.3)
+#             self.ax_output.legend(loc='upper right', fontsize=8)
+#
+#     def show(self):
+#         """Display the interactive plot."""
+#         plt.show()
+
+
 class DualSlider3DPlot:
     """
     Interactive 3D plot with epoch and period sliders for state trajectories.
@@ -130,12 +414,17 @@ class DualSlider3DPlot:
         # Load original state files with outputs
         self.load_outputs()
 
+        # Load inputs and targets
+        self.load_inputs_and_targets()
+
+        # Load phase infos (for sync_continuation tasks)
+        self.load_phase_infos()
+
         # Setup figure
         self.setup_plot()
 
     def load_experiment_config(self):
         """Load experiment configuration for task parameters."""
-        # Go up from pca_preprocessed to find config
         experiment_path = self.pca_dir.parent.parent
         config_path = experiment_path / 'config.json'
 
@@ -156,37 +445,106 @@ class DualSlider3DPlot:
             if state_file.exists():
                 data = np.load(state_file)
                 if 'network_outputs' in data:
-                    self.outputs[epoch] = data['network_outputs']  # (n_periods, timesteps)
+                    self.outputs[epoch] = data['network_outputs']
                 else:
-                    print(f"Warning: No outputs found in {state_file}")
                     self.outputs[epoch] = None
             else:
                 self.outputs[epoch] = None
 
+    def load_inputs_and_targets(self):
+        """Load network inputs and targets from state files."""
+        self.inputs = {}
+        self.targets = {}
+        state_analysis_dir = self.pca_dir.parent
+
+        for epoch in self.epochs:
+            state_file = state_analysis_dir / f'epoch_{epoch}_states.npz'
+            if state_file.exists():
+                data = np.load(state_file)
+                if 'network_inputs' in data:
+                    self.inputs[epoch] = data['network_inputs']  # (n_periods, timesteps)
+                else:
+                    self.inputs[epoch] = None
+
+                if 'target_outputs' in data:
+                    self.targets[epoch] = data['target_outputs']  # (n_periods, timesteps)
+                else:
+                    self.targets[epoch] = None
+            else:
+                self.inputs[epoch] = None
+                self.targets[epoch] = None
+
+    def load_phase_infos(self):
+        """Load phase infos from state files if available."""
+        self.phase_infos = {}
+        state_analysis_dir = self.pca_dir.parent
+
+        for epoch in self.epochs:
+            state_file = state_analysis_dir / f'epoch_{epoch}_states.npz'
+            if state_file.exists():
+                data = np.load(state_file, allow_pickle=True)
+
+                # Check for phase info arrays
+                phase_keys = [k for k in data.files if k.startswith('phase_')]
+
+                # Skip if no phase info
+                if not phase_keys:
+                    continue
+
+                # Check if this is actually array data with proper dimensions
+                first_key = phase_keys[0]
+                try:
+                    test_array = data[first_key]
+                    # Check if it's actually an array with multiple elements
+                    if not hasattr(test_array, 'ndim') or test_array.ndim == 0 or len(test_array) == 0:
+                        continue
+                except (IndexError, TypeError, AttributeError):
+                    continue
+
+                self.phase_infos[epoch] = {}
+                n_periods = len(self.periods)
+
+                for period_idx in range(n_periods):
+                    phase_info = {}
+                    for key in phase_keys:
+                        clean_key = key.replace('phase_', '')
+                        try:
+                            arr = data[key]
+                            if hasattr(arr, 'ndim') and arr.ndim > 0 and period_idx < len(arr):
+                                phase_info[clean_key] = int(arr[period_idx])
+                            else:
+                                phase_info[clean_key] = 0
+                        except (IndexError, TypeError, AttributeError):
+                            phase_info[clean_key] = 0
+
+                    self.phase_infos[epoch][period_idx] = phase_info
+
     def calculate_beat_timesteps(self, period: float) -> list:
         """
         Calculate timestep indices where beats occur.
-
-        Args:
-            period: Beat period in seconds
-
-        Returns:
-            List of timestep indices for beat onsets
         """
         if self.config is None:
             return []
 
         task = self.config['task']
-        n_pulses = task['n_pulses']
+        task_type = task.get('task_type', 'legacy')
         dt = task['dt']
-        # Use fixed ITI from analysis config (min_iti = mean_iti)
-        iti = 2
 
         beat_timesteps = []
-        for i in range(n_pulses):
-            beat_time = iti/2 + i * period
-            beat_timestep = int(beat_time / dt)
-            beat_timesteps.append(beat_timestep)
+
+        if task_type == 'sync_continuation':
+            # For sync_continuation, we don't have fixed beat positions
+            # They vary per trial, so return empty (beats will come from phase_info)
+            return []
+        else:
+            # Legacy behavior
+            n_pulses = task.get('n_pulses', 5)
+            iti = 2  # Fixed ITI for analysis
+
+            for i in range(n_pulses):
+                beat_time = iti / 2 + i * period
+                beat_timestep = int(beat_time / dt)
+                beat_timesteps.append(beat_timestep)
 
         return beat_timesteps
 
@@ -215,14 +573,17 @@ class DualSlider3DPlot:
         self.n_periods = len(self.periods)
 
     def setup_plot(self):
-        """Setup the matplotlib figure with output subplot and 3D axis with sliders."""
-        self.fig = plt.figure(figsize=(12, 12))
+        """Setup the matplotlib figure with input, output subplots and 3D axis with sliders."""
+        self.fig = plt.figure(figsize=(12, 14))
 
-        # Create output axis at the top
-        self.ax_output = self.fig.add_axes([0.1, 0.85, 0.8, 0.08])
+        # Create input axis at the top
+        self.ax_input = self.fig.add_axes([0.1, 0.88, 0.8, 0.06])
+
+        # Create output axis below input
+        self.ax_output = self.fig.add_axes([0.1, 0.80, 0.8, 0.06])
 
         # Create 3D axis below
-        self.ax = self.fig.add_axes([0.1, 0.18, 0.8, 0.65], projection='3d')
+        self.ax = self.fig.add_axes([0.1, 0.18, 0.8, 0.58], projection='3d')
 
         # Create sliders at the bottom
         ax_epoch = plt.axes([0.15, 0.10, 0.7, 0.03])
@@ -251,15 +612,17 @@ class DualSlider3DPlot:
         self.start_point = None
         self.end_point = None
         self.scatter = None
+        self.colorbar = None
 
         # Initial plot
         self.update_plot(None)
 
     def update_plot(self, val):
-        """Update both output and 3D plots based on slider values."""
+        """Update input, output, and 3D plots based on slider values."""
         # Clear previous plots
         self.ax.clear()
         self.ax_output.clear()
+        self.ax_input.clear()
 
         # Get current indices
         epoch_idx = int(self.epoch_slider.val)
@@ -275,57 +638,118 @@ class DualSlider3DPlot:
         mse = data['mse'][period_idx]
         explained_var = data['explained_variance'][period_idx]
 
-        # Calculate beat timesteps
+        # Get phase info if available
+        phase_info = None
+        if hasattr(self, 'phase_infos') and self.phase_infos:
+            if epoch in self.phase_infos:
+                phase_info = self.phase_infos[epoch].get(period_idx, None)
+
+        # Calculate beat timesteps (for legacy tasks)
         beat_timesteps = self.calculate_beat_timesteps(period)
 
-        # Plot output if available
+        # Get time axis
+        if self.config:
+            dt = self.config['task']['dt']
+        else:
+            dt = 0.01  # Default
+
+        # ============ PLOT INPUT ============
+        if hasattr(self, 'inputs') and epoch in self.inputs and self.inputs[epoch] is not None:
+            input_seq = self.inputs[epoch][period_idx]
+            timesteps_count = len(input_seq)
+            time_axis = np.arange(timesteps_count) * dt
+
+            self.ax_input.plot(time_axis, input_seq, 'b-', linewidth=1.5, label='Input')
+            self.ax_input.set_ylabel('Input', fontsize=9)
+            self.ax_input.set_xlim(time_axis[0], time_axis[-1])
+            self.ax_input.grid(True, alpha=0.3)
+            self.ax_input.legend(loc='upper right', fontsize=8)
+
+            # Add phase shading to input
+            if phase_info is not None:
+                att_end = phase_info.get('attention_end_idx', 0) * dt
+                skip_end = phase_info.get('skipped_sync_end_idx', 0) * dt
+                sync_end = phase_info.get('sync_end_idx', 0) * dt
+                cont_end = phase_info.get('continuation_end_idx', timesteps_count) * dt
+                max_time = time_axis[-1]
+
+                if att_end > 0:
+                    self.ax_input.axvspan(0, att_end, color='blue', alpha=0.1)
+                if skip_end > att_end:
+                    self.ax_input.axvspan(att_end, skip_end, color='red', alpha=0.1)
+                if sync_end > skip_end:
+                    self.ax_input.axvspan(skip_end, sync_end, color='green', alpha=0.1)
+                if cont_end > sync_end:
+                    self.ax_input.axvspan(sync_end, cont_end, color='orange', alpha=0.1)
+                if cont_end < max_time:
+                    self.ax_input.axvspan(cont_end, max_time, color='gray', alpha=0.1)
+
+            self.ax_input.set_title(f'Epoch {epoch} | Period {period:.3f}s | MSE: {mse:.6f}', fontsize=11)
+        else:
+            self.ax_input.text(0.5, 0.5, 'Input data not available\nRe-run analyze_states.py',
+                               ha='center', va='center', transform=self.ax_input.transAxes)
+            self.ax_input.set_title(f'Epoch {epoch} | Period {period:.3f}s | MSE: {mse:.6f}', fontsize=11)
+
+        # Remove x-axis labels from input plot (shared with output below)
+        self.ax_input.set_xticklabels([])
+
+        # ============ PLOT OUTPUT AND TARGET ============
         if epoch in self.outputs and self.outputs[epoch] is not None:
-            output = self.outputs[epoch][period_idx]  # (timesteps,)
-            timesteps = len(output)
+            output = self.outputs[epoch][period_idx]
+            timesteps_count = len(output)
+            time_axis = np.arange(timesteps_count) * dt
 
-            if self.config:
-                dt = self.config['task']['dt']
-                time_axis = np.arange(timesteps) * dt
-                self.ax_output.plot(time_axis, output, 'b-', linewidth=1.5, label='Network Output')
-                self.ax_output.set_xlabel('Time (s)')
-            else:
-                self.ax_output.plot(output, 'b-', linewidth=1.5, label='Network Output')
-                self.ax_output.set_xlabel('Timesteps')
+            # Plot target if available
+            if hasattr(self, 'targets') and epoch in self.targets and self.targets[epoch] is not None:
+                target = self.targets[epoch][period_idx]
+                self.ax_output.plot(time_axis, target, 'k--', linewidth=1.5, alpha=0.7, label='Target')
 
-            # Add beat markers on output plot
+            # Plot network output
+            self.ax_output.plot(time_axis, output, 'r-', linewidth=1.5, label='Output')
+
+            self.ax_output.set_xlabel('Time (s)', fontsize=9)
+            self.ax_output.set_ylabel('Output', fontsize=9)
+            self.ax_output.set_xlim(time_axis[0], time_axis[-1])
+            self.ax_output.grid(True, alpha=0.3)
+            self.ax_output.legend(loc='upper right', fontsize=8)
+
+            # Add phase shading to output
+            if phase_info is not None:
+                att_end = phase_info.get('attention_end_idx', 0) * dt
+                skip_end = phase_info.get('skipped_sync_end_idx', 0) * dt
+                sync_end = phase_info.get('sync_end_idx', 0) * dt
+                cont_end = phase_info.get('continuation_end_idx', timesteps_count) * dt
+                max_time = time_axis[-1]
+
+                if att_end > 0:
+                    self.ax_output.axvspan(0, att_end, color='blue', alpha=0.1)
+                if skip_end > att_end:
+                    self.ax_output.axvspan(att_end, skip_end, color='red', alpha=0.1)
+                if sync_end > skip_end:
+                    self.ax_output.axvspan(skip_end, sync_end, color='green', alpha=0.1)
+                if cont_end > sync_end:
+                    self.ax_output.axvspan(sync_end, cont_end, color='orange', alpha=0.1)
+                if cont_end < max_time:
+                    self.ax_output.axvspan(cont_end, max_time, color='gray', alpha=0.1)
+
+            # Add beat markers (for legacy tasks)
             if beat_timesteps:
                 valid_beats = [t for t in beat_timesteps if t < len(output)]
                 if valid_beats:
-                    if self.config:
-                        beat_times = [t * dt for t in valid_beats]
-                        beat_values = output[valid_beats]
-                        self.ax_output.scatter(
-                            beat_times, beat_values,
-                            c='red', s=100, marker='*',
-                            edgecolors='darkred', linewidths=2,
-                            label=f'Beats (n={len(valid_beats)})', zorder=5
-                        )
-                    else:
-                        self.ax_output.scatter(
-                            valid_beats, output[valid_beats],
-                            c='red', s=100, marker='*',
-                            edgecolors='darkred', linewidths=2,
-                            label=f'Beats (n={len(valid_beats)})', zorder=5
-                        )
-
-            self.ax_output.set_ylabel('Output Value')
-            self.ax_output.set_title(f'Network Output - Epoch {epoch}, Period {period:.3f}s, MSE: {mse:.6f}')
-            self.ax_output.grid(True, alpha=0.3)
-            self.ax_output.legend(loc='upper right')
+                    beat_times = [t * dt for t in valid_beats]
+                    beat_values = [output[t] for t in valid_beats]
+                    self.ax_output.scatter(
+                        beat_times, beat_values,
+                        c='red', s=100, marker='*',
+                        edgecolors='darkred', linewidths=2,
+                        zorder=5
+                    )
         else:
-            self.ax_output.text(0.5, 0.5, 'Output data not available\nRe-run analyze_states.py to include outputs',
-                              ha='center', va='center', transform=self.ax_output.transAxes)
-            self.ax_output.set_title(f'Network Output - Epoch {epoch}, Period {period:.3f}s')
+            self.ax_output.text(0.5, 0.5, 'Output data not available\nRe-run analyze_states.py',
+                                ha='center', va='center', transform=self.ax_output.transAxes)
 
-        # Plot 3D trajectory (existing code)
-        # Create time-based colors
+        # ============ PLOT 3D TRAJECTORY ============
         timesteps = len(trajectory)
-        colors = plt.cm.viridis(np.linspace(0, 1, timesteps))
 
         # Plot trajectory as scatter with color gradient
         self.scatter = self.ax.scatter(
@@ -356,31 +780,33 @@ class DualSlider3DPlot:
             c='red', s=100, marker='s', label='End'
         )
 
-        # Add beat markers on 3D trajectory
-        if beat_timesteps:
-            # Ensure beat timesteps are within trajectory length
-            valid_beats = [t for t in beat_timesteps if t < len(trajectory)]
+        # Add phase boundary markers on 3D plot if available
+        if phase_info is not None:
+            boundaries = [
+                ('attention_end_idx', 'Att→Skip', 'blue'),
+                ('skipped_sync_end_idx', 'Skip→Sync', 'red'),
+                ('sync_end_idx', 'Sync→Cont', 'green'),
+                ('continuation_end_idx', 'Cont→Tail', 'orange'),
+            ]
 
+            for key, label, color in boundaries:
+                idx = phase_info.get(key, 0)
+                if 0 < idx < len(trajectory):
+                    self.ax.scatter(
+                        [trajectory[idx, 0]], [trajectory[idx, 1]], [trajectory[idx, 2]],
+                        c=color, s=80, marker='D', label=label
+                    )
+
+        # Add beat markers on 3D trajectory (for legacy tasks)
+        if beat_timesteps:
+            valid_beats = [t for t in beat_timesteps if t < len(trajectory)]
             if valid_beats:
-                beat_points = trajectory[valid_beats]
-                # Add beat numbers instead of stars
                 for i, beat_idx in enumerate(valid_beats, 1):
                     beat_point = trajectory[beat_idx]
                     self.ax.text(beat_point[0], beat_point[1], beat_point[2], str(i),
                                  color='red', fontsize=12, fontweight='bold',
                                  ha='center', va='center',
                                  bbox=dict(boxstyle='circle,pad=0.2', facecolor='yellow', alpha=0.8))
-
-                # Add vertical lines from beat points to show timing
-                for i, beat_idx in enumerate(valid_beats):
-                    beat_point = trajectory[beat_idx]
-                    # Draw a thin vertical line to help visualize beat timing
-                    self.ax.plot(
-                        [beat_point[0], beat_point[0]],
-                        [beat_point[1], beat_point[1]],
-                        [self.ax.get_zlim()[0], beat_point[2]],
-                        'r--', alpha=0.3, linewidth=0.5
-                    )
 
         # Set labels
         self.ax.set_xlabel(f'PC1 ({explained_var[0]:.1%})')
@@ -390,8 +816,8 @@ class DualSlider3DPlot:
         # Set title
         total_var = explained_var.sum()
         self.ax.set_title(
-            f'{self.state_type.capitalize()} States | Total Variance Explained: {total_var:.3f}',
-            fontsize=12
+            f'{self.state_type.capitalize()} States | Variance Explained: {total_var:.1%}',
+            fontsize=11
         )
 
         # Update slider labels
@@ -399,10 +825,10 @@ class DualSlider3DPlot:
         self.period_slider.valtext.set_text(f'{period:.3f}s')
 
         # Add legend
-        self.ax.legend(loc='upper right')
+        self.ax.legend(loc='upper right', fontsize=8)
 
-        # Add colorbar if not exists
-        if not hasattr(self, 'colorbar'):
+        # Add colorbar only once
+        if self.colorbar is None:
             self.colorbar = self.fig.colorbar(
                 self.scatter, ax=self.ax,
                 label='Time (steps)',
@@ -415,7 +841,6 @@ class DualSlider3DPlot:
     def show(self):
         """Display the interactive plot."""
         plt.show()
-
 
 class ComparisonPlot:
     """

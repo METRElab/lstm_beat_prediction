@@ -1,6 +1,6 @@
 {
   "paths": {
-    "experiment_dir": "./experiments/gaussian_noise",
+    "experiment_dir": "./experiments/sync_continuation",
     "experiment_path": null
   },
   "model": {
@@ -18,61 +18,62 @@
     "validation_trials": 100,
     "checkpoint_best_only": true,
     "optimizer": "adam",
-    "use_scheduler": false,
-    "scheduler": {
-      "increase_factor": 1.1,
-      "decrease_factor": 0.9,
-      "still_factor": 1.05,
-      "max_lr": 0.1,
-      "min_lr": 1e-07,
-      "patience_up": 3,
-      "patience_down": 7,
-      "patience_still": 10,
-      "threshold": 0.01,
-      "verbose": true
-    }
+    "use_scheduler": false
   },
   "task": {
-    "min_period": 0.5,
-    "max_period": 0.5,
-    "n_pulses": 5,
-    "pulse_height": 1,
-    "pulse_width": 0.01,
-    "dt": 0.01,
-    "sequence_length": 5.0,
-    "baseline_value": 0.0,
-    "min_iti": 0.7,
-    "mean_iti": 2.0,
-    "target_type": "gaussian_noise",
-    "output_offset": -0.5,
-    "skip_first_n": 0,
-    "ignore_tail_error": true,
-    "gamma_params": {
-      "gamma_length": 0.2,
-      "gamma_shape": 1.75,
-      "gamma_max_height": 0.1
+    "task_type": "sync_continuation",
+
+    "min_period": 0.450,
+    "max_period": 0.850,
+    "period_step": 0.100,
+
+    "attention_phase": {
+      "min_n_pulses": 2,
+      "max_n_pulses": 3
     },
+    "sync_phase": {
+      "min_n_pulses": 5,
+      "max_n_pulses": 6
+    },
+    "continuation_phase": {
+      "min_n_pulses": 3,
+      "max_n_pulses": 5
+    },
+
+    "target_shape": "gaussian",
+
+    "pulse_width": 0.05,
+    "pulse_height": 1.0,
+    "dt": 0.01,
+    "sequence_length": 10.0,
+    "baseline_value": 0.0,
+    "output_offset": 0.0,
+
+    "noise_params": {
+      "phase_noise_std": 0.0,
+      "jitter_std": 0.0
+    },
+
     "gaussian_params": {
-      "gaussian_length": 0.03,
+      "gaussian_length": 0.05,
       "gaussian_sigma": null,
       "gaussian_max_height": 0.3
     },
-    "noise_params": {
-      "phase_noise_std": 0.02,
-      "jitter_std": 0.01,
-      "min_n_pulses": 4,
-      "max_n_pulses": 7,
-      "random_start_offset": true
-    }
+
+    "skip_first_n_sync": 1,
+    "ignore_attention_error": false,
+    "ignore_tail_error": true,
+    "ignore_skipped_sync_error": true
   },
   "logging": {
     "tensorboard": true,
     "log_interval": 10,
-    "save_interval": 10
+    "save_interval": 100
   },
   "testing": {
-    "n_test_periods": 10,
-    "test_trials_per_period": 5
+    "n_test_periods": 9,
+    "test_trials_per_period": 5,
+    "test_period_step": 0.050
   },
   "seed": 42
 }

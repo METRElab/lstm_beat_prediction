@@ -1,7 +1,6 @@
 """
-Save PCA models for each epoch of experiments with gaussian noise.
-This script computes PCA on concatenated states from multiple trials
-and saves the PCA models for later use in interactive visualization.
+Save PCA models for each epoch of experiments.
+Works with both legacy gaussian_noise and sync_continuation tasks.
 """
 
 import argparse
@@ -14,29 +13,26 @@ import numpy as np
 import torch
 from sklearn.decomposition import PCA
 import logging
-
-# Add parent directory to path for imports
 import sys
 
 sys.path.append(str(Path(__file__).parent.parent))
 
 from models.lstm_model import BeatPredictionLSTM
-from data.generators import generate_beat_sequence_gaussian_with_noise
+from data.generators import create_batch_from_config, generate_test_sequences_from_config
 
 
 def setup_logger(name: str, log_file: str = None) -> logging.Logger:
     """Setup logger for the preprocessing."""
     logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)
+    logger.handlers = []
 
-    # Console handler
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
-    # File handler if specified
     if log_file:
         file_handler = logging.FileHandler(log_file)
         file_handler.setFormatter(formatter)
@@ -45,34 +41,8 @@ def setup_logger(name: str, log_file: str = None) -> logging.Logger:
     return logger
 
 
-def parse_experiment_name(folder_name: str) -> Tuple[float, float]:
-    """
-    Parse phase and jitter noise levels from experiment folder name.
-
-    Args:
-        folder_name: Name like '20251109_160331_p0.005_j0.01'
-
-    Returns:
-        (phase_noise, jitter_noise) tuple
-    """
-    match = re.search(r'p([\d.]+)_j([\d.]+)', folder_name)
-    if match:
-        phase = float(match.group(1))
-        jitter = float(match.group(2))
-        return phase, jitter
-    return None, None
-
-
 def get_checkpoint_epochs(checkpoint_dir: Path) -> List[int]:
-    """
-    Get list of available checkpoint epochs.
-
-    Args:
-        checkpoint_dir: Path to checkpoints directory
-
-    Returns:
-        Sorted list of epoch numbers
-    """
+    """Get list of available checkpoint epochs."""
     epochs = []
     for file in checkpoint_dir.glob('checkpoint_epoch_*.pth'):
         match = re.search(r'checkpoint_epoch_(\d+)\.pth', file.name)
@@ -82,69 +52,58 @@ def get_checkpoint_epochs(checkpoint_dir: Path) -> List[int]:
 
 
 def generate_test_data_for_pca(
-        config: Dict[str, Any],
-        analysis_config: Dict[str, Any],
-        phase_noise: float,
-        jitter_noise: float
-) -> Tuple[np.ndarray, np.ndarray]:
+    config: Dict[str, Any],
+    n_periods: int,
+    trials_per_period: int
+) -> Tuple[np.ndarray, List[Dict]]:
     """
-    Generate multiple trials of test data for PCA computation.
+    Generate test data for PCA computation using config-based generation.
 
     Args:
         config: Experiment configuration
-        analysis_config: Analysis configuration
-        phase_noise: Phase noise level for this experiment
-        jitter_noise: Jitter noise level for this experiment
+        n_periods: Number of test periods
+        trials_per_period: Trials per period
 
     Returns:
-        inputs: (n_total_timesteps, 1) concatenated inputs
-        targets: (n_total_timesteps, 1) concatenated targets
+        inputs: (n_trials, timesteps) array
+        phase_infos: List of phase info dicts (for sync_continuation) or empty list
     """
-    task = config['task']
-    n_periods = analysis_config['analysis']['n_test_periods']
-    trials_per_tempo = analysis_config['analysis']['trials_per_tempo']
+    # Create test config
+    test_config = config.copy()
+    test_config['testing'] = {
+        'n_test_periods': n_periods,
+        'test_trials_per_period': trials_per_period
+    }
 
-    # Generate test periods
-    test_periods = np.linspace(task['min_period'], task['max_period'], n_periods)
+    # Use smaller batch for memory efficiency
+    test_config['training'] = test_config.get('training', {})
+    test_config['training']['batch_size'] = 1
+
+    # Generate test sequences
+    test_data = generate_test_sequences_from_config(test_config)
 
     all_inputs = []
-    all_targets = []
+    all_phase_infos = []
 
-    for period in test_periods:
-        for _ in range(trials_per_tempo):
-            # Generate sequence with noise
-            input_seq, target_seq, _ = generate_beat_sequence_gaussian_with_noise(
-                period=period,
-                phase_noise_std=phase_noise,
-                jitter_std=jitter_noise,
-                min_n_pulses=task['noise_params']['min_n_pulses'],
-                max_n_pulses=task['noise_params']['max_n_pulses'],
-                pulse_width=task['pulse_width'],
-                pulse_height=task['pulse_height'],
-                dt=task['dt'],
-                sequence_length=task['sequence_length'],
-                baseline_value=task['baseline_value'],
-                output_offset=task.get('output_offset', -0.5),
-                gaussian_length=task.get('gaussian_params', {}).get('gaussian_length'),
-                gaussian_sigma=task.get('gaussian_params', {}).get('gaussian_sigma'),
-                gaussian_max_height=task.get('gaussian_params', {}).get('gaussian_max_height'),
-                skip_first_n=task.get('skip_first_n', 2)
-            )
+    task_type = config['task'].get('task_type', 'legacy')
 
-            all_inputs.append(input_seq)
-            all_targets.append(target_seq)
+    for period_data in test_data['sequences']:
+        for trial_idx in range(len(period_data['inputs'])):
+            all_inputs.append(period_data['inputs'][trial_idx])
 
-    # Stack all sequences
-    inputs = np.stack(all_inputs)  # (n_trials, timesteps)
-    targets = np.stack(all_targets)
+            # Get phase info if available
+            if task_type == 'sync_continuation' and 'phase_infos' in period_data:
+                all_phase_infos.append(period_data['phase_infos'][trial_idx])
 
-    return inputs, targets
+    inputs = np.stack(all_inputs)
+
+    return inputs, all_phase_infos
 
 
 def collect_states_for_epoch(
-        model: BeatPredictionLSTM,
-        inputs: np.ndarray,
-        device: torch.device
+    model: BeatPredictionLSTM,
+    inputs: np.ndarray,
+    device: torch.device
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Run model on inputs and collect hidden and cell states.
@@ -165,10 +124,8 @@ def collect_states_for_epoch(
 
     with torch.no_grad():
         for input_seq in inputs:
-            # Prepare input tensor (1, timesteps, 1)
             input_tensor = torch.FloatTensor(input_seq).unsqueeze(0).unsqueeze(-1).to(device)
 
-            # Process sequence step by step
             hidden = None
             hidden_states = []
             cell_states = []
@@ -184,17 +141,16 @@ def collect_states_for_epoch(
             all_hidden.extend(hidden_states)
             all_cell.extend(cell_states)
 
-    # Convert to arrays
-    hidden_array = np.array(all_hidden)  # (n_trials * timesteps, hidden_size)
+    hidden_array = np.array(all_hidden)
     cell_array = np.array(all_cell)
 
     return hidden_array, cell_array
 
 
-def process_single_experiment(
-        exp_path: Path,
-        analysis_config: Dict[str, Any],
-        logger: logging.Logger
+def process_experiment(
+    exp_path: Path,
+    analysis_config: Dict[str, Any],
+    logger: logging.Logger
 ) -> None:
     """
     Process all epochs for a single experiment.
@@ -206,14 +162,6 @@ def process_single_experiment(
     """
     logger.info(f"Processing experiment: {exp_path.name}")
 
-    # Parse noise levels from folder name
-    phase_noise, jitter_noise = parse_experiment_name(exp_path.name)
-    if phase_noise is None:
-        logger.warning(f"Could not parse noise levels from {exp_path.name}")
-        return
-
-    logger.info(f"  Phase noise: {phase_noise}, Jitter noise: {jitter_noise}")
-
     # Load experiment config
     config_path = exp_path / 'config.json'
     if not config_path.exists():
@@ -223,6 +171,9 @@ def process_single_experiment(
     with open(config_path, 'r') as f:
         config = json.load(f)
 
+    task_type = config['task'].get('task_type', 'legacy')
+    logger.info(f"Task type: {task_type}")
+
     # Get available checkpoints
     checkpoint_dir = exp_path / 'checkpoints'
     if not checkpoint_dir.exists():
@@ -230,7 +181,7 @@ def process_single_experiment(
         return
 
     epochs = get_checkpoint_epochs(checkpoint_dir)
-    logger.info(f"  Found {len(epochs)} checkpoints")
+    logger.info(f"Found {len(epochs)} checkpoints")
 
     # Create PCA models directory
     pca_dir = exp_path / 'pca_models'
@@ -245,17 +196,20 @@ def process_single_experiment(
         hidden_size=config['model']['hidden_size'],
         num_layers=config['model']['num_layers'],
         output_size=config['model']['output_size'],
-        dropout=config['model']['dropout']
+        dropout=config['model'].get('dropout', 0.0)
     ).to(device)
 
-    # Generate test data once (same data for all epochs)
-    logger.info("  Generating test data...")
-    inputs, _ = generate_test_data_for_pca(config, analysis_config, phase_noise, jitter_noise)
-    logger.info(f"    Generated {inputs.shape[0]} sequences of length {inputs.shape[1]}")
+    # Generate test data
+    logger.info("Generating test data...")
+    n_periods = analysis_config['analysis']['n_test_periods']
+    trials_per_period = analysis_config['analysis']['trials_per_tempo']
+
+    inputs, phase_infos = generate_test_data_for_pca(config, n_periods, trials_per_period)
+    logger.info(f"Generated {inputs.shape[0]} sequences of length {inputs.shape[1]}")
 
     # Process each epoch
     for epoch in epochs:
-        logger.info(f"  Processing epoch {epoch}")
+        logger.info(f"Processing epoch {epoch}")
 
         # Load checkpoint
         checkpoint_path = checkpoint_dir / f'checkpoint_epoch_{epoch}.pth'
@@ -263,23 +217,23 @@ def process_single_experiment(
         model.load_state_dict(checkpoint['model_state_dict'])
 
         # Collect states
-        logger.info("    Collecting states...")
+        logger.info("  Collecting states...")
         hidden_states, cell_states = collect_states_for_epoch(model, inputs, device)
-        logger.info(f"    Collected states shape: {hidden_states.shape}")
+        logger.info(f"  Collected states shape: {hidden_states.shape}")
 
         # Fit PCA for hidden states
-        logger.info("    Fitting PCA for hidden states...")
+        logger.info("  Fitting PCA for hidden states...")
         pca_h = PCA(n_components=analysis_config['analysis']['n_components'])
         pca_h.fit(hidden_states)
         variance_h = pca_h.explained_variance_ratio_.sum()
-        logger.info(f"    Hidden PCA variance explained: {variance_h:.3f}")
+        logger.info(f"  Hidden PCA variance explained: {variance_h:.3f}")
 
         # Fit PCA for cell states
-        logger.info("    Fitting PCA for cell states...")
+        logger.info("  Fitting PCA for cell states...")
         pca_c = PCA(n_components=analysis_config['analysis']['n_components'])
         pca_c.fit(cell_states)
         variance_c = pca_c.explained_variance_ratio_.sum()
-        logger.info(f"    Cell PCA variance explained: {variance_c:.3f}")
+        logger.info(f"  Cell PCA variance explained: {variance_c:.3f}")
 
         # Save PCA models
         pca_h_path = pca_dir / f'epoch_{epoch}_pca_h.pkl'
@@ -290,12 +244,11 @@ def process_single_experiment(
         with open(pca_c_path, 'wb') as f:
             pickle.dump(pca_c, f)
 
-        logger.info(f"    Saved PCA models for epoch {epoch}")
+        logger.info(f"  Saved PCA models for epoch {epoch}")
 
     # Save metadata
     metadata = {
-        'phase_noise': phase_noise,
-        'jitter_noise': jitter_noise,
+        'task_type': task_type,
         'epochs_processed': epochs,
         'n_components': analysis_config['analysis']['n_components'],
         'trials_per_tempo': analysis_config['analysis']['trials_per_tempo'],
@@ -306,56 +259,60 @@ def process_single_experiment(
     with open(metadata_path, 'w') as f:
         json.dump(metadata, f, indent=2)
 
-    logger.info(f"  Completed processing {exp_path.name}")
+    logger.info(f"Completed processing {exp_path.name}")
 
 
 def main():
-    """Main function to process all experiments."""
-    parser = argparse.ArgumentParser(description='Save PCA models for gaussian noise experiments')
-    parser.add_argument('--base_dir', type=str, default='experiments/gaussian_noise',
-                        help='Base directory containing all experiments')
+    """Main function to process experiments."""
+    parser = argparse.ArgumentParser(description='Save PCA models for experiments')
+    parser.add_argument('--experiment_path', type=str, default=None,
+                        help='Path to specific experiment directory')
+    parser.add_argument('--base_dir', type=str, default=None,
+                        help='Base directory containing multiple experiments')
     parser.add_argument('--analysis_config', type=str, default='config/pca_analysis_config.json',
                         help='Path to analysis configuration')
-    parser.add_argument('--specific_experiment', type=str, default=None,
-                        help='Process only this specific experiment (folder name)')
 
     args = parser.parse_args()
 
-    # Setup logger
     logger = setup_logger('pca_preprocessing')
 
     # Load analysis config
-    with open(args.analysis_config, 'r') as f:
-        analysis_config = json.load(f)
+    analysis_config_path = Path(args.analysis_config)
+    if analysis_config_path.exists():
+        with open(analysis_config_path, 'r') as f:
+            analysis_config = json.load(f)
+    else:
+        # Default config
+        analysis_config = {
+            'analysis': {
+                'n_test_periods': 9,
+                'trials_per_tempo': 3,
+                'n_components': 3
+            }
+        }
+        logger.warning(f"Analysis config not found, using defaults: {analysis_config}")
 
-    logger.info(f"Analysis configuration:")
-    logger.info(f"  Trials per tempo: {analysis_config['analysis']['trials_per_tempo']}")
-    logger.info(f"  Number of test periods: {analysis_config['analysis']['n_test_periods']}")
-    logger.info(f"  PCA components: {analysis_config['analysis']['n_components']}")
+    logger.info(f"Analysis configuration: {analysis_config}")
 
-    # Get list of experiments to process
-    base_dir = Path(args.base_dir)
-    if not base_dir.exists():
-        logger.error(f"Base directory not found: {base_dir}")
+    # Determine which experiments to process
+    if args.experiment_path:
+        exp_paths = [Path(args.experiment_path)]
+    elif args.base_dir:
+        base_dir = Path(args.base_dir)
+        exp_paths = sorted([d for d in base_dir.iterdir() if d.is_dir() and (d / 'config.json').exists()])
+    else:
+        logger.error("Must specify either --experiment_path or --base_dir")
         return
 
-    if args.specific_experiment:
-        exp_dirs = [base_dir / args.specific_experiment]
-        if not exp_dirs[0].exists():
-            logger.error(f"Specific experiment not found: {exp_dirs[0]}")
-            return
-    else:
-        # Find all experiment directories with pattern
-        exp_dirs = sorted([d for d in base_dir.iterdir() if d.is_dir() and '_p' in d.name and '_j' in d.name])
+    logger.info(f"Found {len(exp_paths)} experiments to process")
 
-    logger.info(f"Found {len(exp_dirs)} experiments to process")
-
-    # Process each experiment
-    for exp_dir in exp_dirs:
+    for exp_path in exp_paths:
         try:
-            process_single_experiment(exp_dir, analysis_config, logger)
+            process_experiment(exp_path, analysis_config, logger)
         except Exception as e:
-            logger.error(f"Failed to process {exp_dir.name}: {str(e)}")
+            logger.error(f"Failed to process {exp_path.name}: {str(e)}")
+            import traceback
+            traceback.print_exc()
             continue
 
     logger.info("PCA preprocessing complete!")
