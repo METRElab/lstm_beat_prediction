@@ -11,6 +11,8 @@ import torch
 import re
 
 from models.lstm_model import BeatPredictionLSTM
+from models.feedback_lstm import FeedbackLSTM
+from models.feedback import create_feedback_components
 from data.generators import generate_test_sequences_from_config
 
 
@@ -46,6 +48,12 @@ class StateAnalyzer:
         self.task_type = self.experiment_config['task'].get('task_type', 'legacy')
         self.logger.info(f"Task type: {self.task_type}")
 
+        # Check feedback configuration
+        self.feedback_config = self.experiment_config.get('feedback', {})
+        self.feedback_enabled = self.feedback_config.get('enabled', False)
+        if self.feedback_enabled:
+            self.logger.info(f"Feedback enabled: threshold={self.feedback_config.get('threshold')}, delay={self.feedback_config.get('delay')}s")
+
         # Override ITI settings for analysis (only for legacy tasks)
         if self.task_type != 'sync_continuation':
             self.min_iti = analysis_config['analysis'].get('min_iti', 2.0)
@@ -80,21 +88,34 @@ class StateAnalyzer:
         self.logger.info(f"Found {len(checkpoint_files)} checkpoints")
         return checkpoint_files
 
-    def create_model(self) -> BeatPredictionLSTM:
+    def create_model(self):
         """
         Create model instance from experiment config.
 
+        Returns FeedbackLSTM when feedback is enabled, otherwise BeatPredictionLSTM.
+
         Returns:
-            LSTM model
+            LSTM model (BeatPredictionLSTM or FeedbackLSTM)
         """
         config = self.experiment_config
-        model = BeatPredictionLSTM(
-            input_size=config['model']['input_size'],
-            hidden_size=config['model']['hidden_size'],
-            num_layers=config['model']['num_layers'],
-            output_size=config['model']['output_size'],
-            dropout=config['model']['dropout']
-        )
+
+        if self.feedback_enabled:
+            model = FeedbackLSTM(
+                input_size=config['model']['input_size'],
+                hidden_size=config['model']['hidden_size'],
+                num_layers=config['model']['num_layers'],
+                output_size=config['model']['output_size'],
+                dropout=config['model']['dropout'],
+                feedback_config=self.feedback_config
+            )
+        else:
+            model = BeatPredictionLSTM(
+                input_size=config['model']['input_size'],
+                hidden_size=config['model']['hidden_size'],
+                num_layers=config['model']['num_layers'],
+                output_size=config['model']['output_size'],
+                dropout=config['model']['dropout']
+            )
         return model
 
     def generate_test_periods(self) -> np.ndarray:
@@ -148,6 +169,77 @@ class StateAnalyzer:
 
         return outputs, all_h_t, all_c_t
 
+    def run_sequence_with_feedback(
+        self,
+        model: FeedbackLSTM,
+        input_sequence: torch.Tensor
+    ) -> Tuple[torch.Tensor, List[np.ndarray], List[np.ndarray], np.ndarray]:
+        """
+        Run LSTM step by step with feedback loop to collect hidden/cell states and feedback signal.
+
+        Args:
+            model: FeedbackLSTM model
+            input_sequence: Input tensor (1, timesteps, 1)
+
+        Returns:
+            outputs: Model predictions (1, timesteps, 1)
+            all_h_t: List of hidden states at each timestep
+            all_c_t: List of cell states at each timestep
+            feedback_signal: Feedback signal array (timesteps,)
+        """
+        dt = self.experiment_config['task']['dt']
+        sequence_length = input_sequence.shape[1]
+        batch_size = 1
+
+        # Initialize feedback components
+        buffer, pulse_gen = create_feedback_components(
+            config=self.feedback_config,
+            dt=dt,
+            batch_size=batch_size,
+            device=self.device
+        )
+
+        outputs = []
+        all_h_t = []
+        all_c_t = []
+        feedback_list = []
+
+        hidden = None
+
+        for t in range(sequence_length):
+            x_t = input_sequence[:, t:t+1, :]
+
+            # Get delayed feedback from buffer
+            if t == 0:
+                delayed_feedback = torch.zeros(batch_size, 1, device=self.device)
+            else:
+                delayed_feedback = buffer.buffer[0]
+
+            # Combine input with feedback (additive)
+            combined_input = x_t + delayed_feedback.unsqueeze(1)
+
+            # Forward through model's base lstm
+            if hasattr(model, 'lstm'):
+                output_t, hidden = model.lstm(combined_input, hidden)
+            else:
+                output_t, hidden = model.forward(combined_input, hidden)
+
+            h_t, c_t = hidden
+
+            outputs.append(output_t)
+            all_h_t.append(h_t.squeeze(1).cpu().numpy())
+            all_c_t.append(c_t.squeeze(1).cpu().numpy())
+
+            # Check threshold and generate feedback pulse
+            feedback_pulse = pulse_gen.step(output_t.squeeze(1))
+            buffer.push(feedback_pulse)
+            feedback_list.append(feedback_pulse.squeeze().cpu().numpy())
+
+        outputs = torch.cat(outputs, dim=1)
+        feedback_signal = np.array(feedback_list)
+
+        return outputs, all_h_t, all_c_t, feedback_signal
+
     def analyze_all_checkpoints(self) -> None:
         """
         Analyze all checkpoints and save results.
@@ -197,8 +289,9 @@ class StateAnalyzer:
             hidden_states = []
             cell_states = []
             network_outputs = []
-            network_inputs = []  # ADD THIS
-            target_outputs = []  # ADD THIS
+            network_inputs = []
+            target_outputs = []
+            feedback_signals = []  # For feedback-enabled models
             mse_per_period = []
             all_phase_infos = []
 
@@ -222,9 +315,13 @@ class StateAnalyzer:
                 input_tensor = torch.FloatTensor(input_seq).unsqueeze(0).unsqueeze(-1).to(self.device)
                 target_tensor = torch.FloatTensor(target_seq).unsqueeze(0).unsqueeze(-1).to(self.device)
 
-                # Run step by step
+                # Run step by step (with or without feedback)
                 with torch.no_grad():
-                    outputs, h_t_list, c_t_list = self.run_sequence_step_by_step(model, input_tensor)
+                    if self.feedback_enabled:
+                        outputs, h_t_list, c_t_list, feedback_signal = self.run_sequence_with_feedback(model, input_tensor)
+                        feedback_signals.append(feedback_signal)
+                    else:
+                        outputs, h_t_list, c_t_list = self.run_sequence_step_by_step(model, input_tensor)
 
                 # Calculate MSE (respecting phase masking for sync_continuation)
                 if is_sync_continuation and phase_info is not None:
@@ -258,21 +355,26 @@ class StateAnalyzer:
             hidden_states = np.array(hidden_states)
             cell_states = np.array(cell_states)
             network_outputs = np.array(network_outputs)
-            network_inputs = np.array(network_inputs)  # ADD THIS
-            target_outputs = np.array(target_outputs)  # ADD THIS
+            network_inputs = np.array(network_inputs)
+            target_outputs = np.array(target_outputs)
 
             # Prepare save data
             save_data = {
                 'hidden_states': hidden_states,
                 'cell_states': cell_states,
                 'network_outputs': network_outputs,
-                'network_inputs': network_inputs,  # ADD THIS
-                'target_outputs': target_outputs,  # ADD THIS
+                'network_inputs': network_inputs,
+                'target_outputs': target_outputs,
                 'periods': test_data['periods'],
                 'mse_per_period': mse_per_period,
                 'epoch': epoch,
-                'task_type': self.task_type
+                'task_type': self.task_type,
+                'feedback_enabled': self.feedback_enabled
             }
+
+            # Add feedback signals if feedback is enabled
+            if self.feedback_enabled and feedback_signals:
+                save_data['feedback_signals'] = np.array(feedback_signals)
 
             # Add phase infos for sync_continuation
             if is_sync_continuation and all_phase_infos:

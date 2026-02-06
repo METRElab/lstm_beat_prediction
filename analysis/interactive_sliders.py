@@ -417,6 +417,9 @@ class DualSlider3DPlot:
         # Load inputs and targets
         self.load_inputs_and_targets()
 
+        # Load feedback signals (for feedback-enabled models)
+        self.load_feedback_signals()
+
         # Load phase infos (for sync_continuation tasks)
         self.load_phase_infos()
 
@@ -473,6 +476,24 @@ class DualSlider3DPlot:
             else:
                 self.inputs[epoch] = None
                 self.targets[epoch] = None
+
+    def load_feedback_signals(self):
+        """Load feedback signals from state files if available."""
+        self.feedback_signals = {}
+        self.feedback_enabled = False
+        state_analysis_dir = self.pca_dir.parent
+
+        for epoch in self.epochs:
+            state_file = state_analysis_dir / f'epoch_{epoch}_states.npz'
+            if state_file.exists():
+                data = np.load(state_file)
+                if 'feedback_signals' in data:
+                    self.feedback_signals[epoch] = data['feedback_signals']  # (n_periods, timesteps)
+                    self.feedback_enabled = True
+                else:
+                    self.feedback_signals[epoch] = None
+            else:
+                self.feedback_signals[epoch] = None
 
     def load_phase_infos(self):
         """Load phase infos from state files if available."""
@@ -573,17 +594,37 @@ class DualSlider3DPlot:
         self.n_periods = len(self.periods)
 
     def setup_plot(self):
-        """Setup the matplotlib figure with input, output subplots and 3D axis with sliders."""
-        self.fig = plt.figure(figsize=(12, 14))
+        """Setup the matplotlib figure with input, feedback, output subplots and 3D axis with sliders."""
+        # Adjust figure height based on whether feedback is enabled
+        fig_height = 16 if self.feedback_enabled else 14
+        self.fig = plt.figure(figsize=(12, fig_height))
 
-        # Create input axis at the top
-        self.ax_input = self.fig.add_axes([0.1, 0.88, 0.8, 0.06])
+        if self.feedback_enabled:
+            # Layout with feedback subplot
+            # Create input axis at the top
+            self.ax_input = self.fig.add_axes([0.1, 0.90, 0.8, 0.05])
 
-        # Create output axis below input
-        self.ax_output = self.fig.add_axes([0.1, 0.80, 0.8, 0.06])
+            # Create feedback axis below input (NEW)
+            self.ax_feedback = self.fig.add_axes([0.1, 0.84, 0.8, 0.05])
 
-        # Create 3D axis below
-        self.ax = self.fig.add_axes([0.1, 0.18, 0.8, 0.58], projection='3d')
+            # Create output axis below feedback
+            self.ax_output = self.fig.add_axes([0.1, 0.78, 0.8, 0.05])
+
+            # Create 3D axis below
+            self.ax = self.fig.add_axes([0.1, 0.18, 0.8, 0.56], projection='3d')
+        else:
+            # Original layout without feedback subplot
+            # Create input axis at the top
+            self.ax_input = self.fig.add_axes([0.1, 0.88, 0.8, 0.06])
+
+            # Create output axis below input
+            self.ax_output = self.fig.add_axes([0.1, 0.80, 0.8, 0.06])
+
+            # Create 3D axis below
+            self.ax = self.fig.add_axes([0.1, 0.18, 0.8, 0.58], projection='3d')
+
+            # No feedback axis
+            self.ax_feedback = None
 
         # Create sliders at the bottom
         ax_epoch = plt.axes([0.15, 0.10, 0.7, 0.03])
@@ -618,11 +659,13 @@ class DualSlider3DPlot:
         self.update_plot(None)
 
     def update_plot(self, val):
-        """Update input, output, and 3D plots based on slider values."""
+        """Update input, feedback, output, and 3D plots based on slider values."""
         # Clear previous plots
         self.ax.clear()
         self.ax_output.clear()
         self.ax_input.clear()
+        if self.ax_feedback is not None:
+            self.ax_feedback.clear()
 
         # Get current indices
         epoch_idx = int(self.epoch_slider.val)
@@ -690,8 +733,46 @@ class DualSlider3DPlot:
                                ha='center', va='center', transform=self.ax_input.transAxes)
             self.ax_input.set_title(f'Epoch {epoch} | Period {period:.3f}s | MSE: {mse:.6f}', fontsize=11)
 
-        # Remove x-axis labels from input plot (shared with output below)
+        # Remove x-axis labels from input plot (shared with plots below)
         self.ax_input.set_xticklabels([])
+
+        # ============ PLOT FEEDBACK (if enabled) ============
+        if self.ax_feedback is not None:
+            if hasattr(self, 'feedback_signals') and epoch in self.feedback_signals and self.feedback_signals[epoch] is not None:
+                feedback_seq = self.feedback_signals[epoch][period_idx]
+                timesteps_count = len(feedback_seq)
+                time_axis = np.arange(timesteps_count) * dt
+
+                self.ax_feedback.plot(time_axis, feedback_seq, 'g-', linewidth=1.5, label='Feedback')
+                self.ax_feedback.set_ylabel('Feedback', fontsize=9)
+                self.ax_feedback.set_xlim(time_axis[0], time_axis[-1])
+                self.ax_feedback.grid(True, alpha=0.3)
+                self.ax_feedback.legend(loc='upper right', fontsize=8)
+
+                # Add phase shading to feedback
+                if phase_info is not None:
+                    att_end = phase_info.get('attention_end_idx', 0) * dt
+                    skip_end = phase_info.get('skipped_sync_end_idx', 0) * dt
+                    sync_end = phase_info.get('sync_end_idx', 0) * dt
+                    cont_end = phase_info.get('continuation_end_idx', timesteps_count) * dt
+                    max_time = time_axis[-1]
+
+                    if att_end > 0:
+                        self.ax_feedback.axvspan(0, att_end, color='blue', alpha=0.1)
+                    if skip_end > att_end:
+                        self.ax_feedback.axvspan(att_end, skip_end, color='red', alpha=0.1)
+                    if sync_end > skip_end:
+                        self.ax_feedback.axvspan(skip_end, sync_end, color='green', alpha=0.1)
+                    if cont_end > sync_end:
+                        self.ax_feedback.axvspan(sync_end, cont_end, color='orange', alpha=0.1)
+                    if cont_end < max_time:
+                        self.ax_feedback.axvspan(cont_end, max_time, color='gray', alpha=0.1)
+            else:
+                self.ax_feedback.text(0.5, 0.5, 'Feedback data not available',
+                                      ha='center', va='center', transform=self.ax_feedback.transAxes)
+
+            # Remove x-axis labels from feedback plot
+            self.ax_feedback.set_xticklabels([])
 
         # ============ PLOT OUTPUT AND TARGET ============
         if epoch in self.outputs and self.outputs[epoch] is not None:
