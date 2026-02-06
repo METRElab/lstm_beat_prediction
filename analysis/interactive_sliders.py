@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.widgets import Slider
+from matplotlib.widgets import Slider, Button
 from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.animation import FuncAnimation
 
@@ -626,9 +626,9 @@ class DualSlider3DPlot:
             # No feedback axis
             self.ax_feedback = None
 
-        # Create sliders at the bottom
-        ax_epoch = plt.axes([0.15, 0.10, 0.7, 0.03])
-        ax_period = plt.axes([0.15, 0.05, 0.7, 0.03])
+        # Create sliders at the bottom (adjusted positions to make room for animation controls)
+        ax_epoch = plt.axes([0.15, 0.12, 0.7, 0.02])
+        ax_period = plt.axes([0.15, 0.08, 0.7, 0.02])
 
         self.epoch_slider = Slider(
             ax_epoch, 'Epoch',
@@ -648,12 +648,51 @@ class DualSlider3DPlot:
         self.epoch_slider.on_changed(self.update_plot)
         self.period_slider.on_changed(self.update_plot)
 
+        # Animation controls at the bottom
+        # Play/Pause button
+        ax_play = plt.axes([0.15, 0.02, 0.08, 0.03])
+        self.play_button = Button(ax_play, 'Play')
+        self.play_button.on_clicked(self.toggle_animation)
+
+        # Speed slider (controls animation interval in ms)
+        ax_speed = plt.axes([0.30, 0.02, 0.20, 0.03])
+        self.speed_slider = Slider(
+            ax_speed, 'Speed',
+            10, 200,
+            valinit=50, valstep=10,
+            valfmt='%dms'
+        )
+        self.speed_slider.on_changed(self._update_animation_speed)
+
+        # Timeline slider for scrubbing (frame number)
+        # Get initial trajectory length for max value
+        initial_epoch = self.epochs[0]
+        initial_trajectory = self.data[initial_epoch]['states'][0]
+        self.max_frames = len(initial_trajectory)
+
+        ax_timeline = plt.axes([0.58, 0.02, 0.27, 0.03])
+        self.timeline_slider = Slider(
+            ax_timeline, 'Frame',
+            0, self.max_frames - 1,
+            valinit=0, valstep=1,
+            valfmt='%d'
+        )
+        self.timeline_slider.on_changed(self.scrub_to_frame)
+
         # Initialize plot
         self.trajectory_line = None
         self.start_point = None
         self.end_point = None
         self.scatter = None
         self.colorbar = None
+
+        # Animation state
+        self.animation = None
+        self.is_playing = False
+        self.current_frame = 0
+        self.animation_speed = 50  # ms per frame (default)
+        self.current_trajectory = None
+        self.time_markers = []  # Store time marker lines for cleanup
 
         # Initial plot
         self.update_plot(None)
@@ -919,9 +958,227 @@ class DualSlider3DPlot:
 
         self.fig.canvas.draw_idle()
 
+    def _update_animation_speed(self, val):
+        """Update animation speed from slider."""
+        self.animation_speed = int(val)
+        # If animation is running, we need to restart it with new speed
+        if self.is_playing and self.animation is not None:
+            current_frame = self.current_frame
+            self.stop_animation()
+            self.current_frame = current_frame
+            self.start_animation()
+
+    def toggle_animation(self, event):
+        """Toggle play/pause state."""
+        if self.is_playing:
+            self.stop_animation()
+        else:
+            self.start_animation()
+
+    def start_animation(self):
+        """Start trajectory animation."""
+        self.is_playing = True
+        self.play_button.label.set_text('Pause')
+
+        # Get current trajectory data
+        epoch_idx = int(self.epoch_slider.val)
+        period_idx = int(self.period_slider.val)
+        epoch = self.epochs[epoch_idx]
+        self.current_trajectory = self.data[epoch]['states'][period_idx]
+        self.current_epoch = epoch
+        self.current_period_idx = period_idx
+
+        # Get explained variance for axis labels
+        self.current_explained_var = self.data[epoch]['explained_variance'][period_idx]
+
+        # Update timeline slider max value for this trajectory
+        self.max_frames = len(self.current_trajectory)
+        self.timeline_slider.valmax = self.max_frames - 1
+        self.timeline_slider.ax.set_xlim(0, self.max_frames - 1)
+
+        # Disable epoch/period sliders during playback
+        self.epoch_slider.set_active(False)
+        self.period_slider.set_active(False)
+
+        # Create animation starting from current frame
+        remaining_frames = range(self.current_frame, len(self.current_trajectory))
+
+        self.animation = FuncAnimation(
+            self.fig,
+            self.animate_frame,
+            frames=remaining_frames,
+            interval=self.animation_speed,
+            blit=False,
+            repeat=False
+        )
+        self.fig.canvas.draw()
+
+    def stop_animation(self):
+        """Stop trajectory animation."""
+        self.is_playing = False
+        self.play_button.label.set_text('Play')
+
+        if self.animation is not None:
+            self.animation.event_source.stop()
+            self.animation = None
+
+        # Re-enable sliders
+        self.epoch_slider.set_active(True)
+        self.period_slider.set_active(True)
+
+    def animate_frame(self, frame):
+        """Update visualization for animation frame."""
+        self.current_frame = frame
+
+        # Update timeline slider position (without triggering callback)
+        self.timeline_slider.eventson = False
+        self.timeline_slider.set_val(frame)
+        self.timeline_slider.eventson = True
+
+        # Draw the trajectory at this frame
+        self._draw_trajectory_at_frame(frame)
+
+        # Update time marker on 2D plots
+        self._update_time_marker(frame)
+
+        # Check if animation complete
+        if frame >= len(self.current_trajectory) - 1:
+            self.stop_animation()
+            self.current_frame = 0  # Reset for next play
+
+        return []
+
+    def _draw_trajectory_at_frame(self, frame):
+        """Draw the 3D trajectory up to the specified frame."""
+        # Clear 3D axis only
+        self.ax.clear()
+
+        trajectory = self.current_trajectory
+        if trajectory is None:
+            return
+
+        # Plot trajectory up to current frame (trail)
+        if frame > 0:
+            # Trail: line connecting all points up to current
+            self.ax.plot(
+                trajectory[:frame+1, 0],
+                trajectory[:frame+1, 1],
+                trajectory[:frame+1, 2],
+                'b-', linewidth=1, alpha=0.5
+            )
+
+            # Scatter for trail with fading colors
+            colors = np.linspace(0.3, 1.0, frame+1)
+            self.ax.scatter(
+                trajectory[:frame+1, 0],
+                trajectory[:frame+1, 1],
+                trajectory[:frame+1, 2],
+                c=colors, cmap='viridis', s=5, alpha=0.6
+            )
+
+        # Current point (bright, large red dot)
+        self.ax.scatter(
+            [trajectory[frame, 0]],
+            [trajectory[frame, 1]],
+            [trajectory[frame, 2]],
+            c='red', s=150, marker='o', edgecolors='white', linewidths=2,
+            label='Current', zorder=10
+        )
+
+        # Start marker (green)
+        self.ax.scatter(
+            [trajectory[0, 0]], [trajectory[0, 1]], [trajectory[0, 2]],
+            c='green', s=100, marker='o', label='Start'
+        )
+
+        # Set axis properties
+        self._set_3d_axis_properties()
+
+    def _set_3d_axis_properties(self):
+        """Set 3D axis labels and properties during animation."""
+        if hasattr(self, 'current_explained_var') and self.current_explained_var is not None:
+            explained_var = self.current_explained_var
+            self.ax.set_xlabel(f'PC1 ({explained_var[0]:.1%})')
+            self.ax.set_ylabel(f'PC2 ({explained_var[1]:.1%})')
+            self.ax.set_zlabel(f'PC3 ({explained_var[2]:.1%})')
+
+            total_var = explained_var.sum()
+            self.ax.set_title(
+                f'{self.state_type.capitalize()} States | Frame {self.current_frame}/{self.max_frames-1}',
+                fontsize=11
+            )
+        else:
+            self.ax.set_xlabel('PC1')
+            self.ax.set_ylabel('PC2')
+            self.ax.set_zlabel('PC3')
+
+        self.ax.legend(loc='upper right', fontsize=8)
+
+    def _update_time_marker(self, frame):
+        """Update vertical time marker on input/output/feedback plots."""
+        dt = self.config['task']['dt'] if self.config else 0.01
+        current_time = frame * dt
+
+        # Remove old markers from all axes
+        for ax in [self.ax_input, self.ax_output]:
+            # Find and remove existing time markers
+            lines_to_remove = []
+            for line in ax.get_lines():
+                if hasattr(line, '_is_time_marker') and line._is_time_marker:
+                    lines_to_remove.append(line)
+            for line in lines_to_remove:
+                line.remove()
+
+            # Add new time marker
+            marker = ax.axvline(x=current_time, color='red', linewidth=2, alpha=0.8)
+            marker._is_time_marker = True
+
+        # Handle feedback axis if it exists
+        if self.ax_feedback is not None:
+            lines_to_remove = []
+            for line in self.ax_feedback.get_lines():
+                if hasattr(line, '_is_time_marker') and line._is_time_marker:
+                    lines_to_remove.append(line)
+            for line in lines_to_remove:
+                line.remove()
+
+            marker = self.ax_feedback.axvline(x=current_time, color='red', linewidth=2, alpha=0.8)
+            marker._is_time_marker = True
+
+    def scrub_to_frame(self, val):
+        """Jump to specific frame in trajectory (timeline slider callback)."""
+        if self.is_playing:
+            return  # Don't interfere with animation
+
+        frame = int(val)
+
+        # Make sure we have trajectory data
+        epoch_idx = int(self.epoch_slider.val)
+        period_idx = int(self.period_slider.val)
+        epoch = self.epochs[epoch_idx]
+
+        # Load trajectory if not already loaded
+        if self.current_trajectory is None or not hasattr(self, 'current_epoch') or self.current_epoch != epoch:
+            self.current_trajectory = self.data[epoch]['states'][period_idx]
+            self.current_epoch = epoch
+            self.current_period_idx = period_idx
+            self.current_explained_var = self.data[epoch]['explained_variance'][period_idx]
+            self.max_frames = len(self.current_trajectory)
+
+        # Clamp frame to valid range
+        frame = max(0, min(frame, len(self.current_trajectory) - 1))
+        self.current_frame = frame
+
+        # Draw trajectory at this frame
+        self._draw_trajectory_at_frame(frame)
+        self._update_time_marker(frame)
+
+        self.fig.canvas.draw_idle()
+
     def show(self):
         """Display the interactive plot."""
         plt.show()
+
 
 class ComparisonPlot:
     """
