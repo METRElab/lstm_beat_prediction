@@ -569,6 +569,68 @@ class DualSlider3DPlot:
 
         return beat_timesteps
 
+    def _calculate_ideal_beat_times(self, period_idx: int, epoch: int, max_time: float) -> list:
+        """
+        Calculate ideal beat times extending to the end of the experiment.
+
+        For sync_continuation tasks, derive from input data and extrapolate using period.
+        For legacy tasks, use calculate_beat_timesteps and extrapolate.
+
+        Args:
+            period_idx: Index of current period
+            epoch: Current epoch
+            max_time: Maximum time in the sequence (in seconds)
+
+        Returns:
+            List of beat times (in seconds) covering the full experiment
+        """
+        if self.config is None:
+            return []
+
+        dt = self.config['task']['dt']
+        period = self.periods[period_idx]
+        task_type = self.config['task'].get('task_type', 'legacy')
+
+        if task_type == 'sync_continuation':
+            # Find the first beat time from input data
+            input_seq = self.inputs.get(epoch)
+            if input_seq is None:
+                return []
+            input_seq = input_seq[period_idx]
+
+            # Find first non-zero in input (first beat)
+            first_beat_idx = np.argmax(input_seq > 0.1)
+            if first_beat_idx == 0 and input_seq[0] <= 0.1:
+                return []  # No input pulses found
+
+            first_beat_time = first_beat_idx * dt
+
+            # Generate beats from first beat to max_time
+            beat_times = []
+            current_time = first_beat_time
+            while current_time <= max_time:
+                beat_times.append(current_time)
+                current_time += period
+
+            return beat_times
+        else:
+            # Legacy behavior - use existing calculation and extend
+            beat_timesteps = self.calculate_beat_timesteps(period)
+            if not beat_timesteps:
+                return []
+
+            beat_times = [t * dt for t in beat_timesteps]
+
+            # Extend beyond last beat until max_time
+            if beat_times:
+                last_beat = beat_times[-1]
+                current_time = last_beat + period
+                while current_time <= max_time:
+                    beat_times.append(current_time)
+                    current_time += period
+
+            return beat_times
+
     def load_data(self):
         """Load all PCA preprocessed data."""
         pca_files = sorted(self.pca_dir.glob('epoch_*_pca_states.npz'))
@@ -867,6 +929,29 @@ class DualSlider3DPlot:
         else:
             self.ax_output.text(0.5, 0.5, 'Output data not available\nRe-run analyze_states.py',
                                 ha='center', va='center', transform=self.ax_output.transAxes)
+
+        # ============ DRAW IDEAL BEAT LINES (extrapolated to full experiment) ============
+        # Get time axis for max_time calculation
+        if epoch in self.outputs and self.outputs[epoch] is not None:
+            output = self.outputs[epoch][period_idx]
+            timesteps_count = len(output)
+            max_time = timesteps_count * dt
+
+            ideal_beat_times = self._calculate_ideal_beat_times(period_idx, epoch, max_time)
+
+            for bt in ideal_beat_times:
+                # Draw on input plot
+                self.ax_input.axvline(x=bt, color='gray', linestyle='--',
+                                      linewidth=1, alpha=0.4)
+
+                # Draw on feedback plot (if exists)
+                if self.ax_feedback is not None:
+                    self.ax_feedback.axvline(x=bt, color='gray', linestyle='--',
+                                             linewidth=1, alpha=0.4)
+
+                # Draw on output plot
+                self.ax_output.axvline(x=bt, color='gray', linestyle='--',
+                                       linewidth=1, alpha=0.4)
 
         # ============ PLOT 3D TRAJECTORY ============
         timesteps = len(trajectory)
