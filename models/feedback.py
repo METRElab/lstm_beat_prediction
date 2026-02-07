@@ -98,6 +98,9 @@ class FeedbackPulseGenerator:
         self.device = device
         self.dt = dt
 
+        # Continuation phase decay coefficient
+        self.continuation_decay = config.get('continuation_decay', 1.0)
+
         # Pre-compute pulse template
         self.pulse_template = self._create_pulse_template()
 
@@ -105,6 +108,10 @@ class FeedbackPulseGenerator:
         self.active_pulses = None
         self.refractory_counters = None
         self.batch_size = None
+
+        # Decay state (initialized in reset())
+        self.current_height_multiplier = None
+        self.in_continuation = None
 
     def _create_pulse_template(self) -> torch.Tensor:
         """
@@ -151,15 +158,30 @@ class FeedbackPulseGenerator:
         )
         self.refractory_counters = torch.zeros(batch_size, device=self.device)
 
+        # Reset decay state
+        self.current_height_multiplier = torch.ones(batch_size, device=self.device)
+        self.in_continuation = torch.zeros(batch_size, dtype=torch.bool, device=self.device)
+
+    def set_continuation_phase(self, in_continuation: torch.Tensor):
+        """
+        Set which batch items are currently in continuation phase.
+
+        Args:
+            in_continuation: Boolean tensor of shape (batch_size,) indicating
+                            which items are in continuation phase
+        """
+        self.in_continuation = in_continuation.to(self.device)
+
     def step(self, output: torch.Tensor) -> torch.Tensor:
         """
         Check if output crosses threshold and generate feedback pulse.
 
         This method should be called at each timestep. It:
         1. Checks if output exceeds threshold (and not in refractory period)
-        2. Starts new pulse if triggered (immediately)
+        2. Starts new pulse if triggered (with current height multiplier)
         3. Returns current pulse value for this timestep
         4. Advances pulse and refractory counters for next step
+        5. Applies decay to height multiplier if triggered in continuation phase
 
         Args:
             output: Model output tensor of shape (batch_size, 1)
@@ -177,10 +199,16 @@ class FeedbackPulseGenerator:
         not_refractory = (self.refractory_counters <= 0).float()
         should_trigger = above_threshold * not_refractory
 
+        # Track which items triggered AND are in continuation (for decay)
+        will_decay = should_trigger * self.in_continuation.float()
+
         # Add new pulse templates where triggered (before reading current value)
+        # Scale by current height multiplier
         for i in range(batch_size):
             if should_trigger[i] > 0:
-                self.active_pulses[i] = self.pulse_template.clone()
+                # Scale pulse template by current height multiplier
+                scaled_pulse = self.pulse_template.clone() * self.current_height_multiplier[i]
+                self.active_pulses[i] = scaled_pulse
                 self.refractory_counters[i] = float(self.refractory_steps)
 
         # Get current pulse value (now includes newly triggered pulses)
@@ -192,6 +220,14 @@ class FeedbackPulseGenerator:
 
         # Decrement refractory counters
         self.refractory_counters = torch.clamp(self.refractory_counters - 1, min=0)
+
+        # Apply decay for NEXT pulse (only for items that triggered in continuation)
+        # height_next = height_current * (1 - will_decay * (1 - decay))
+        #             = height_current * decay  if triggered in continuation
+        #             = height_current          otherwise
+        self.current_height_multiplier = self.current_height_multiplier * (
+            1.0 - will_decay * (1.0 - self.continuation_decay)
+        )
 
         return current_pulse
 

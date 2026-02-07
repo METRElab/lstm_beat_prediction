@@ -84,9 +84,17 @@ class FeedbackTrainer(Trainer):
             # Zero gradients
             self.optimizer.zero_grad()
 
+            # Get continuation start indices for decay (if applicable)
+            continuation_start_indices = None
+            task_type = self.config.get("task", {}).get("task_type", "legacy")
+            if task_type == "sync_continuation" and phase_infos is not None:
+                continuation_start_indices = [
+                    phase_info.get("sync_end_idx", 0) for phase_info in phase_infos
+                ]
+
             # Forward pass with feedback (step-by-step)
             outputs, _, feedback_signal = self.model.forward_with_feedback(
-                inputs, self.dt
+                inputs, self.dt, continuation_start_idx=continuation_start_indices
             )
 
             # Get masking options from config
@@ -166,9 +174,17 @@ class FeedbackTrainer(Trainer):
                 inputs = inputs.to(self.device)
                 targets = targets.to(self.device)
 
+                # Get continuation start indices for decay (if applicable)
+                continuation_start_indices = None
+                task_type = self.config.get("task", {}).get("task_type", "legacy")
+                if task_type == "sync_continuation" and phase_infos is not None:
+                    continuation_start_indices = [
+                        phase_info.get("sync_end_idx", 0) for phase_info in phase_infos
+                    ]
+
                 # Forward pass with feedback
                 outputs, _, feedback_signal = self.model.forward_with_feedback(
-                    inputs, self.dt
+                    inputs, self.dt, continuation_start_idx=continuation_start_indices
                 )
 
                 # Get masking options from config

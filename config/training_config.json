@@ -82,7 +82,8 @@
     "pulse_shape": "rectangular",
     "pulse_width": 0.05,
     "pulse_height": 1.0,
-    "refractory_period": 0.05
+    "refractory_period": 0.05,
+    "continuation_decay": 0.7
   },
   "seed": 42
 }

@@ -172,7 +172,8 @@ class StateAnalyzer:
     def run_sequence_with_feedback(
         self,
         model: FeedbackLSTM,
-        input_sequence: torch.Tensor
+        input_sequence: torch.Tensor,
+        phase_info: Optional[Dict[str, Any]] = None
     ) -> Tuple[torch.Tensor, List[np.ndarray], List[np.ndarray], np.ndarray]:
         """
         Run LSTM step by step with feedback loop to collect hidden/cell states and feedback signal.
@@ -180,6 +181,7 @@ class StateAnalyzer:
         Args:
             model: FeedbackLSTM model
             input_sequence: Input tensor (1, timesteps, 1)
+            phase_info: Optional phase info dict with 'sync_end_idx' for decay
 
         Returns:
             outputs: Model predictions (1, timesteps, 1)
@@ -190,6 +192,11 @@ class StateAnalyzer:
         dt = self.experiment_config['task']['dt']
         sequence_length = input_sequence.shape[1]
         batch_size = 1
+
+        # Get continuation start index for decay
+        continuation_start_idx = None
+        if phase_info is not None:
+            continuation_start_idx = phase_info.get('sync_end_idx', None)
 
         # Initialize feedback components
         buffer, pulse_gen = create_feedback_components(
@@ -207,6 +214,15 @@ class StateAnalyzer:
         hidden = None
 
         for t in range(sequence_length):
+            # Update phase information for decay
+            if continuation_start_idx is not None:
+                in_continuation = torch.tensor(
+                    [t >= continuation_start_idx],
+                    dtype=torch.bool,
+                    device=self.device
+                )
+                pulse_gen.set_continuation_phase(in_continuation)
+
             x_t = input_sequence[:, t:t+1, :]
 
             # Get delayed feedback from buffer
@@ -318,7 +334,9 @@ class StateAnalyzer:
                 # Run step by step (with or without feedback)
                 with torch.no_grad():
                     if self.feedback_enabled:
-                        outputs, h_t_list, c_t_list, feedback_signal = self.run_sequence_with_feedback(model, input_tensor)
+                        outputs, h_t_list, c_t_list, feedback_signal = self.run_sequence_with_feedback(
+                            model, input_tensor, phase_info=phase_info
+                        )
                         feedback_signals.append(feedback_signal)
                     else:
                         outputs, h_t_list, c_t_list = self.run_sequence_step_by_step(model, input_tensor)

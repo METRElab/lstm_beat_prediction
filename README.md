@@ -36,6 +36,12 @@ This three-phase structure mirrors the synchronization-continuation paradigm use
 - Interactive 3D trajectory visualization
 - Phase-aware performance metrics
 
+### Feedback Loop System
+
+- Optional feedback loop that injects pulses back into the model when output crosses a threshold
+- Configurable delay, pulse shape, and refractory period
+- Continuation phase decay: feedback strength can decay exponentially during self-paced continuation
+
 ## Installation
 
 ```bash
@@ -108,6 +114,12 @@ python analysis/interactive_sliders.py \
     --plot_type all
 ```
 
+**Animation Controls** (in interactive_sliders.py):
+- **Play/Pause**: Click to start/stop trajectory animation
+- **Speed slider**: Adjust playback speed (default 50ms/frame)
+- **Timeline slider**: Scrub to any frame in the sequence
+- **Ideal beat lines**: Gray dashed lines show where perfect beats would occur
+
 #### Sync-Continuation Specific Plots (Matplotlib)
 
 Standalone plots designed for the sync-continuation task with phase boundary visualization.
@@ -156,11 +168,14 @@ Then open `http://localhost:6006` in your browser.
 
 ```
 ├── models/
-│   └── lstm_model.py                  # LSTM architecture
+│   ├── lstm_model.py                  # LSTM architecture
+│   ├── feedback.py                    # Feedback buffer and pulse generator
+│   └── feedback_lstm.py               # Feedback-enabled LSTM wrapper
 ├── data/
 │   └── generators.py                  # Sequence generation (sync-continuation + legacy)
 ├── training/
-│   └── trainer.py                     # Training loop with phase-aware loss masking
+│   ├── trainer.py                     # Training loop with phase-aware loss masking
+│   └── feedback_trainer.py            # Trainer for feedback-enabled models
 ├── analysis/
 │   ├── save_pca_models.py             # PCA model computation for all checkpoints
 │   ├── state_analyzer.py              # Hidden/cell state extraction with phase info
@@ -221,6 +236,55 @@ Key parameters in `training_config_sync_continuation.json`:
 | `ignore_attention_error` | Don't penalize outputs during attention |
 | `ignore_tail_error` | Don't penalize outputs after continuation |
 
+## Feedback System
+
+The model supports an optional feedback loop that simulates sensorimotor feedback. When the model's output crosses a threshold, a feedback pulse is injected back into the input after a configurable delay.
+
+### Feedback Configuration
+
+Add a `feedback` section to your config file:
+
+```json
+{
+  "feedback": {
+    "enabled": true,
+    "threshold": 0.1,
+    "delay": 0.05,
+    "pulse_shape": "rectangular",
+    "pulse_width": 0.05,
+    "pulse_height": 1.0,
+    "refractory_period": 0.05,
+    "continuation_decay": 0.9
+  }
+}
+```
+
+| Parameter | Description |
+|-----------|-------------|
+| `enabled` | Toggle feedback on/off |
+| `threshold` | Output value that triggers feedback pulse |
+| `delay` | Delay (seconds) between threshold crossing and feedback injection |
+| `pulse_shape` | Shape of feedback pulse: "rectangular", "gaussian", or "gamma" |
+| `pulse_width` | Duration of feedback pulse (seconds) |
+| `pulse_height` | Initial amplitude of feedback pulse |
+| `refractory_period` | Minimum time (seconds) between consecutive triggers |
+| `continuation_decay` | Decay coefficient (0.0-1.0) for pulse height in continuation phase |
+
+### Continuation Phase Decay
+
+When `continuation_decay < 1.0`, feedback pulse height decays exponentially during the continuation phase:
+
+- **Attention/Sync phases**: Full pulse height (no decay)
+- **Continuation phase**: Each trigger multiplies height by `continuation_decay`
+
+Example with `continuation_decay: 0.9`:
+- 1st trigger in continuation: height = 1.0
+- 2nd trigger: height = 0.9
+- 3rd trigger: height = 0.81
+- etc.
+
+This simulates diminishing sensory feedback when external stimuli are absent.
+
 ## Training vs Testing Periods
 
 - **Training**: 5 discrete periods (450, 550, 650, 750, 850 ms)
@@ -232,10 +296,14 @@ This tests generalization to untrained tempos.
 
 ### Interactive Sliders
 - Epoch and period selection via sliders
-- Input signal display with phase shading
+- Input, feedback, and output signal display with phase shading
 - Target vs output comparison
 - 3D PCA-reduced hidden/cell state trajectories
 - Phase boundary markers (attention → sync → continuation)
+- **Ideal beat markers**: Faded dashed lines showing where beats should occur, extending through the entire experiment
+- **Animated playback**: Play/Pause button to watch trajectory evolve in real-time
+- **Speed control**: Adjust animation speed (10-200ms per frame)
+- **Timeline scrubbing**: Jump to any point in the trajectory
 
 ### Sync-Continuation Plots
 - **Output with Phases**: Input, target, and output signals with color-coded phase regions

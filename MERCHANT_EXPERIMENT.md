@@ -214,6 +214,7 @@ We designed our LSTM task to match the Merchant Lab paradigm as closely as possi
 | **Continuation Pulses** | N/A | 3-5 (randomized) | New — tests tempo without input |
 | **First Sync Excluded** | Yes (transition) | Yes (`skip_first_n_sync: 1`) | Match analysis convention |
 | **Block Design** | Yes (fixed context) | No (random period per trial) | Increases generalization demand |
+| **Feedback Loop** | N/A (motor execution) | Optional feedback system | Simulates sensorimotor feedback |
 
 ### Key Alignments with Merchant Lab
 
@@ -403,6 +404,24 @@ def sample_n_pulses(min_n, max_n):
 
 Uses truncated Poisson distribution centered at midpoint.
 
+#### Feedback Loop (Optional)
+
+When feedback is enabled, the model receives a delayed copy of its own output:
+
+```
+Output → [Threshold Detection] → [Delay Buffer] → [Add to Input]
+                                      ↓
+                               [Pulse Generator]
+```
+
+This simulates the auditory/proprioceptive feedback a subject receives from their own motor actions. The `continuation_decay` parameter models diminishing feedback confidence without external reference signals.
+
+**Feedback Parameters:**
+- `threshold`: Output level that triggers feedback (e.g., 0.1)
+- `delay`: Time delay before feedback injection (e.g., 50ms)
+- `pulse_shape`: Shape of feedback pulse (rectangular, gaussian, gamma)
+- `continuation_decay`: Exponential decay rate during continuation phase
+
 ---
 
 ## Configuration Reference
@@ -487,6 +506,16 @@ Uses truncated Poisson distribution centered at midpoint.
     "test_trials_per_period": 10,
     "test_period_step": 0.050
   },
+  "feedback": {
+    "enabled": true,
+    "threshold": 0.1,
+    "delay": 0.05,
+    "pulse_shape": "rectangular",
+    "pulse_width": 0.05,
+    "pulse_height": 1.0,
+    "refractory_period": 0.05,
+    "continuation_decay": 0.9
+  },
   "seed": 42
 }
 ```
@@ -507,10 +536,22 @@ Uses truncated Poisson distribution centered at midpoint.
 | `ignore_attention_error` | true | Don't compute loss during attention |
 | `ignore_tail_error` | true | Don't compute loss after continuation |
 | `test_period_step` | 0.050 | Finer step for testing generalization |
+| `feedback.enabled` | true/false | Enable/disable feedback loop |
+| `feedback.threshold` | 0.1 | Output level triggering feedback |
+| `feedback.delay` | 0.05 | Feedback delay in seconds |
+| `feedback.continuation_decay` | 0.9 | Pulse height decay coefficient in continuation phase |
 
 ---
 
 ## Future Improvements
+
+### Implemented Features
+
+The following features have been implemented:
+
+- **Feedback Loop**: Configurable sensorimotor feedback system with delay, threshold, pulse shapes, and continuation phase decay
+- **Animated Visualization**: Real-time 3D trajectory playback with Play/Pause, speed control, and timeline scrubbing
+- **Ideal Beat Markers**: Visual reference lines showing where perfect beats would occur, extending through the entire experiment
 
 ### 1. Neural Trajectory Analysis Measures
 

@@ -5,7 +5,7 @@ Provides FeedbackLSTM which wraps the base BeatPredictionLSTM with
 additive feedback injection capability.
 """
 
-from typing import Tuple, Optional, Dict, Any, List
+from typing import Tuple, Optional, Dict, Any, List, Union
 import torch
 import torch.nn as nn
 
@@ -91,6 +91,7 @@ class FeedbackLSTM(nn.Module):
         self,
         x: torch.Tensor,
         dt: float,
+        continuation_start_idx: Optional[Union[int, List[int], torch.Tensor]] = None,
         hidden: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
     ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor], torch.Tensor]:
         """
@@ -102,6 +103,10 @@ class FeedbackLSTM(nn.Module):
         Args:
             x: Input tensor (batch_size, seq_len, input_size) - external input
             dt: Time step size in seconds
+            continuation_start_idx: Timestep index where continuation phase begins.
+                                   Can be a single int (same for all), a list of ints
+                                   (one per batch item), or a tensor of shape (batch_size,).
+                                   If provided, enables feedback decay in continuation phase.
             hidden: Optional initial hidden state tuple
 
         Returns:
@@ -130,10 +135,33 @@ class FeedbackLSTM(nn.Module):
         if hidden is None:
             hidden = self.lstm.init_hidden(batch_size, device)
 
+        # Convert continuation_start_idx to tensor if provided
+        cont_start_tensor = None
+        if continuation_start_idx is not None:
+            if isinstance(continuation_start_idx, int):
+                cont_start_tensor = torch.tensor(
+                    [continuation_start_idx] * batch_size,
+                    dtype=torch.long,
+                    device=device
+                )
+            elif isinstance(continuation_start_idx, list):
+                cont_start_tensor = torch.tensor(
+                    continuation_start_idx,
+                    dtype=torch.long,
+                    device=device
+                )
+            else:
+                cont_start_tensor = continuation_start_idx.to(device)
+
         outputs = []
         feedback_signals = []
 
         for t in range(seq_len):
+            # Update phase information for pulse generator (for decay)
+            if cont_start_tensor is not None:
+                in_continuation = (t >= cont_start_tensor)
+                pulse_gen.set_continuation_phase(in_continuation)
+
             # Get external input at timestep t
             x_t = x[:, t:t+1, :]  # (batch, 1, input_size)
 
@@ -199,7 +227,8 @@ class FeedbackLSTM(nn.Module):
     def predict_with_feedback(
         self,
         x: torch.Tensor,
-        dt: float
+        dt: float,
+        continuation_start_idx: Optional[int] = None
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Make predictions with feedback, without returning hidden states.
@@ -207,12 +236,15 @@ class FeedbackLSTM(nn.Module):
         Args:
             x: Input tensor
             dt: Time step size in seconds
+            continuation_start_idx: Timestep index where continuation phase begins
 
         Returns:
             Tuple of (predictions, feedback_signal)
         """
         with torch.no_grad():
-            output, _, feedback = self.forward_with_feedback(x, dt)
+            output, _, feedback = self.forward_with_feedback(
+                x, dt, continuation_start_idx=continuation_start_idx
+            )
         return output, feedback
 
 
